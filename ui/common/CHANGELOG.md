@@ -2,10 +2,9 @@
 
 ## [5.0.2](https://github.com/SAP/e-mobility-charging-stations-simulator/compare/ui-common@v5.0.1...ui-common@v5.0.2) (2026-11-15)
 
-
 ### 🐞 Bug Fixes
 
-* **deps:** update all non-major dependencies ([#2201](https://github.com/SAP/e-mobility-charging-stations-simulator/issues/2201)) ([af5791d](https://github.com/SAP/e-mobility-charging-stations-simulator/commit/af5791d23ad7731debc4687ec71dd43fea986791))
+- **deps:** update all non-major dependencies ([#2201](https://github.com/SAP/e-mobility-charging-stations-simulator/issues/2201)) ([af5791d](https://github.com/SAP/e-mobility-charging-stations-simulator/commit/af5791d23ad7731debc4687ec71dd43fea986791))
 
 ## [5.0.1](https://github.com/SAP/e-mobility-charging-stations-simulator/compare/ui-common@v5.0.0...ui-common@v5.0.1) (2026-11-11)
 
