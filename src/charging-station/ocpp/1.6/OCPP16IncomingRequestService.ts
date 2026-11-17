@@ -810,33 +810,19 @@ export class OCPP16IncomingRequestService extends OCPPIncomingRequestService<OCP
                 .requestHandler<StatusNotificationOptions, OCPP16StatusNotificationResponse>(
                   chargingStation,
                   OCPP16RequestCommand.STATUS_NOTIFICATION,
-                  {
-                    connectorId,
-                    status: resolveTriggeredStatusNotificationStatus(
-                      chargingStation,
-                      connectorId,
-                      chargingStation.getConnectorStatus(connectorId)?.status
-                    ),
-                  },
+                  this.buildTriggeredStatusNotification(chargingStation, connectorId),
                   {
                     triggerMessage: true,
                   }
                 )
                 .catch(errorHandler)
             } else {
-              for (const { connectorId, connectorStatus } of chargingStation.iterateConnectors()) {
+              for (const { connectorId } of chargingStation.iterateConnectors()) {
                 chargingStation.ocppRequestService
                   .requestHandler<StatusNotificationOptions, OCPP16StatusNotificationResponse>(
                     chargingStation,
                     OCPP16RequestCommand.STATUS_NOTIFICATION,
-                    {
-                      connectorId,
-                      status: resolveTriggeredStatusNotificationStatus(
-                        chargingStation,
-                        connectorId,
-                        connectorStatus.status
-                      ),
-                    },
+                    this.buildTriggeredStatusNotification(chargingStation, connectorId),
                     {
                       triggerMessage: true,
                     }
@@ -1031,6 +1017,29 @@ export class OCPP16IncomingRequestService extends OCPPIncomingRequestService<OCP
         }
       )
     })
+  }
+
+  /**
+   * Builds a triggered StatusNotification, with the EV side disconnected info when it applies.
+   * @param chargingStation - Target charging station
+   * @param connectorId - Connector identifier
+   * @returns StatusNotification request options
+   */
+  private buildTriggeredStatusNotification (
+    chargingStation: ChargingStation,
+    connectorId: number
+  ): StatusNotificationOptions {
+    const connectorStatus = chargingStation.getConnectorStatus(connectorId)
+    const status = resolveTriggeredStatusNotificationStatus(
+      chargingStation,
+      connectorId,
+      connectorStatus?.status
+    )
+    return {
+      connectorId,
+      status,
+      ...OCPP16ServiceUtils.getEVSideDisconnectedStatusFields(connectorStatus, status),
+    }
   }
 
   /**

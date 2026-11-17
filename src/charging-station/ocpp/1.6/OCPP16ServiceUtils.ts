@@ -31,6 +31,7 @@ import {
   ChargingStationEvents,
   type ConfigurationKey,
   type ConnectorStatus,
+  type ConnectorStatusEnum,
   ErrorType,
   type GenericResponse,
   type MeterValue,
@@ -66,6 +67,7 @@ import {
   type RequestParams,
   type StartTransactionRequest,
   type StartTransactionResponse,
+  type StatusNotificationOptions,
   type StopTransactionReason,
   type StopTransactionRequest,
   type StopTransactionResponse,
@@ -899,6 +901,28 @@ export class OCPP16ServiceUtils {
   }
 
   /**
+   * @param connectorStatus - Connector status
+   * @param status - Status about to be reported
+   * @returns The StatusNotification error code and info of a SuspendedEV status caused by an unplugged cable during a transaction
+   */
+  public static getEVSideDisconnectedStatusFields (
+    connectorStatus: ConnectorStatus | undefined,
+    status: ConnectorStatusEnum | undefined
+  ): Pick<StatusNotificationOptions, 'errorCode' | 'info'> {
+    if (
+      status === OCPP16ChargePointStatus.SuspendedEV &&
+      connectorStatus?.transactionStarted === true &&
+      OCPP16ServiceUtils.isEVSideDisconnected(connectorStatus)
+    ) {
+      return {
+        errorCode: OCPP16ChargePointErrorCode.NO_ERROR,
+        info: OCPP16Constants.EV_SIDE_DISCONNECTED_INFO,
+      }
+    }
+    return {}
+  }
+
+  /**
    * Gets the OCPP 1.6 StartTransaction currently in flight on a connector.
    * Shutdown awaits it before deciding whether the accepted transaction needs a StopTransaction.
    * @param connectorStatus - Connector whose pending start is queried
@@ -1013,19 +1037,26 @@ export class OCPP16ServiceUtils {
 
   /**
    * Sets the boot cable state: connectors start unplugged, except a connector
-   * with a restored open transaction, which comes back plugged so the session
-   * continues (a restart does not unplug the EV).
+   * with a restored open transaction. Its persisted cable state is kept: a cable
+   * unplugged at shutdown comes back unplugged in SuspendedEV (meter frozen,
+   * connector locked), otherwise it comes back plugged in Charging.
    * @param chargingStation - Target charging station
    */
   public static initializeEVSideCableState (chargingStation: ChargingStation): void {
     for (const { connectorStatus } of chargingStation.iterateConnectors(true)) {
-      const transactionOpen = connectorStatus.transactionStarted === true
-      connectorStatus.cablePlugged = transactionOpen
+      if (connectorStatus.transactionStarted !== true) {
+        connectorStatus.cablePlugged = false
+        continue
+      }
+      if (OCPP16ServiceUtils.isEVSideDisconnected(connectorStatus)) {
+        connectorStatus.status = OCPP16ChargePointStatus.SuspendedEV
+        continue
+      }
+      connectorStatus.cablePlugged = true
       // A graceful stop clears the status: a restored transaction boots back into Charging.
       if (
-        transactionOpen &&
-        (connectorStatus.status == null ||
-          connectorStatus.status === OCPP16ChargePointStatus.SuspendedEV)
+        connectorStatus.status == null ||
+        connectorStatus.status === OCPP16ChargePointStatus.SuspendedEV
       ) {
         connectorStatus.status = OCPP16ChargePointStatus.Charging
       }

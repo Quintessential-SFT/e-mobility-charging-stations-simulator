@@ -24,9 +24,11 @@ import {
   OCPP16ChargePointStatus,
   OCPP16ConfigurationStatus,
   OCPP16IncomingRequestCommand,
+  OCPP16MessageTrigger,
   OCPP16RequestCommand,
   OCPP16StandardParametersKey,
   OCPP16StopTransactionReason,
+  OCPP16TriggerMessageStatus,
   OCPPVersion,
   RequestCommand,
   type SampledValueTemplate,
@@ -167,6 +169,98 @@ await describe('OCPP16ServiceUtils — EV side disconnect', async () => {
 
       assert.strictEqual(connectorStatus.cablePlugged, true)
       assert.strictEqual(connectorStatus.status, OCPP16ChargePointStatus.Charging)
+    })
+  })
+
+  await describe('restored transaction with an unplugged cable', async () => {
+    await it('should come back unplugged in SuspendedEV with the EV side disconnected info', () => {
+      setupConnectorWithTransaction(station, 1, { transactionId: 13 })
+      const connectorStatus = station.getConnectorStatus(1)
+      assert.ok(connectorStatus != null)
+      connectorStatus.cablePlugged = false
+      delete connectorStatus.status
+
+      OCPP16ServiceUtils.initializeEVSideCableState(station)
+
+      assert.strictEqual(connectorStatus.cablePlugged, false)
+      assert.strictEqual(connectorStatus.status, OCPP16ChargePointStatus.SuspendedEV)
+      assert.deepStrictEqual(
+        OCPP16ServiceUtils.getEVSideDisconnectedStatusFields(
+          connectorStatus,
+          connectorStatus.status
+        ),
+        {
+          errorCode: OCPP16ChargePointErrorCode.NO_ERROR,
+          info: 'EV side disconnected',
+        }
+      )
+      assert.deepStrictEqual(
+        OCPP16ServiceUtils.getEVSideDisconnectedStatusFields(
+          connectorStatus,
+          OCPP16ChargePointStatus.Unavailable
+        ),
+        {}
+      )
+    })
+
+    await it('should not add the EV side disconnected info for a plugged or idle connector', () => {
+      setupConnectorWithTransaction(station, 1, { transactionId: 14 })
+      OCPP16ServiceUtils.initializeEVSideCableState(station)
+      const plugged = station.getConnectorStatus(1)
+      const idle = station.getConnectorStatus(2)
+      assert.ok(plugged != null && idle != null)
+
+      assert.strictEqual(plugged.cablePlugged, true)
+      assert.deepStrictEqual(
+        OCPP16ServiceUtils.getEVSideDisconnectedStatusFields(plugged, plugged.status),
+        {}
+      )
+      assert.strictEqual(idle.cablePlugged, false)
+      assert.deepStrictEqual(
+        OCPP16ServiceUtils.getEVSideDisconnectedStatusFields(
+          idle,
+          OCPP16ChargePointStatus.SuspendedEV
+        ),
+        {}
+      )
+    })
+  })
+
+  await describe('triggered StatusNotification', async () => {
+    await it('should carry the EV side disconnected info while SuspendedEV and unplugged', async () => {
+      const { incomingRequestService, station: triggerStation } =
+        createOCPP16IncomingRequestTestContext()
+      setupConnectorWithTransaction(triggerStation, 1, { transactionId: 15 })
+      const connectorStatus = triggerStation.getConnectorStatus(1)
+      assert.ok(connectorStatus != null)
+      connectorStatus.status = OCPP16ChargePointStatus.SuspendedEV
+      connectorStatus.cablePlugged = false
+      const sent: unknown[] = []
+      ;(
+        triggerStation.ocppRequestService as unknown as {
+          requestHandler: (...args: unknown[]) => Promise<unknown>
+        }
+      ).requestHandler = (...args: unknown[]) => {
+        if (args[1] === OCPP16RequestCommand.STATUS_NOTIFICATION) sent.push(args[2])
+        return Promise.resolve({})
+      }
+
+      incomingRequestService.emit(
+        OCPP16IncomingRequestCommand.TRIGGER_MESSAGE,
+        triggerStation,
+        { connectorId: 1, requestedMessage: OCPP16MessageTrigger.StatusNotification },
+        { status: OCPP16TriggerMessageStatus.ACCEPTED }
+      )
+      await flushMicrotasks()
+
+      assert.deepStrictEqual(sent, [
+        {
+          connectorId: 1,
+          errorCode: OCPP16ChargePointErrorCode.NO_ERROR,
+          info: 'EV side disconnected',
+          status: OCPP16ChargePointStatus.SuspendedEV,
+        },
+      ])
     })
   })
 

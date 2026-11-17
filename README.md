@@ -1362,7 +1362,10 @@ OCPP 1.6 only. Unplugs the cable at the EV side of a connector. See [EV side cab
 
 Each OCPP 1.6 connector simulates whether the cable is plugged in at the EV side (`cablePlugged` in the connector status):
 
-- Connectors start unplugged. A connector with an open transaction restored from the persisted state (keep it across a restart with `stopTransactionsOnStopped` false) comes back plugged, reports `Charging` and resumes its periodic meter values after the BootNotification is accepted.
+- Connectors start unplugged. A connector with an open transaction restored from the persisted state (keep it across a restart with `stopTransactionsOnStopped` false) keeps its cable state and resumes its periodic meter values after the BootNotification is accepted:
+  - plugged at shutdown: comes back plugged and reports `Charging`;
+  - unplugged at shutdown: comes back unplugged and reports `SuspendedEV` with `errorCode` `NoError` and `info` 'EV side disconnected', meter values frozen, connector locked.
+- A Reset.req (Soft or Hard) stops every ongoing transaction (StopTransaction reason `SoftReset` / `HardReset`) before the reset, regardless of `stopTransactionsOnStopped`, so no transaction is restored after a reset (OCPP 1.6 §5.14).
 - Plug on an `Available` connector reports `Preparing`; unplug on a `Preparing` connector without a transaction reports `Available`.
 - An accepted RemoteStartTransaction on an unplugged connector reports `Preparing` and sends StartTransaction when the cable is plugged. When `ConnectionTimeOut` (> 0) elapses first, the remote start is cancelled and the connector reports `Available`.
 - A StartTransaction from the UI or the automatic transaction generator marks the cable plugged.

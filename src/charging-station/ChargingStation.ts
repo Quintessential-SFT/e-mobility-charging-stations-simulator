@@ -4723,12 +4723,15 @@ export class ChargingStation extends EventEmitter {
       this.startHeartbeat()
     }
     for (const { connectorId, connectorStatus, evseId } of this.iterateConnectors(true)) {
+      const bootStatus = getBootConnectorStatus(this, connectorId, connectorStatus)
       await sendAndSetConnectorStatus(
         this,
         {
           connectorId,
           ...(evseId != null && { evseId }),
-          status: getBootConnectorStatus(this, connectorId, connectorStatus),
+          status: bootStatus,
+          ...(this.stationInfo?.ocppVersion === OCPPVersion.VERSION_16 &&
+            OCPP16ServiceUtils.getEVSideDisconnectedStatusFields(connectorStatus, bootStatus)),
         },
         { responseTimeoutMs, send: true }
       )
