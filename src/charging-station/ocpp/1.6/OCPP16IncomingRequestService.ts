@@ -2013,7 +2013,9 @@ export class OCPP16IncomingRequestService extends OCPPIncomingRequestService<OCP
       if (chargingStation.lifecycleAbortSignal !== lifecycleSignal || lifecycleSignal.aborted) {
         return
       }
-      await chargingStation.reset(reason, graceful)
+      // §5.14: send StopTransaction for every ongoing transaction before the reset,
+      // so no transaction is restored afterwards.
+      await chargingStation.reset(reason, graceful, true)
     })
     logger.info(
       `${chargingStation.logPrefix()} ${moduleName}.handleRequestReset: ${resetType} reset request received, simulating it. The station will be back online in ${formatDurationMilliSeconds(

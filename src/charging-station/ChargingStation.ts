@@ -1618,10 +1618,18 @@ export class ChargingStation extends EventEmitter {
    * Resets the charging station with optional graceful shutdown.
    * @param reason - Optional reason for the reset
    * @param graceful - Whether to perform a graceful shutdown
+   * @param stopTransactions - Whether to stop running transactions, overriding the graceful default
    */
-  public async reset (reason?: StopTransactionReason, graceful = true): Promise<void> {
+  public async reset (
+    reason?: StopTransactionReason,
+    graceful = true,
+    stopTransactions?: boolean
+  ): Promise<void> {
     try {
-      await this.stop(reason, graceful ? this.stationInfo?.stopTransactionsOnStopped : false)
+      await this.stop(
+        reason,
+        stopTransactions ?? (graceful ? this.stationInfo?.stopTransactionsOnStopped : false)
+      )
     } catch (error) {
       const e = ensureError(error)
       logger.error(`${this.logPrefix()} ${moduleName}.reset: Error during reset stop phase:`, e)
