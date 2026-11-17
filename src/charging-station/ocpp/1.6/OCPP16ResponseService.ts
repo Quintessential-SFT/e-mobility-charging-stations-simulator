@@ -27,6 +27,7 @@ import {
   OCPP16StandardParametersKey,
   type OCPP16StartTransactionRequest,
   type OCPP16StartTransactionResponse,
+  OCPP16StopTransactionReason,
   type OCPP16StopTransactionRequest,
   type OCPP16StopTransactionResponse,
   OCPPVersion,
@@ -80,7 +81,14 @@ const finalizeTransactionConnectorStatus = (
   resetConnectorStatus(connectorStatus)
   chargingStation.destroyCoherentSession(requestPayload.transactionId)
   if (connectorStatus != null) {
-    connectorStatus.locked = false
+    // OCPP 1.6 §4.10: after an EV side disconnect stop, the connector unlocks
+    // only when UnlockConnectorOnEVSideDisconnect is true.
+    const keepLocked =
+      requestPayload.reason === OCPP16StopTransactionReason.EV_DISCONNECTED &&
+      !OCPP16ServiceUtils.getUnlockConnectorOnEVSideDisconnect(chargingStation)
+    if (!keepLocked) {
+      connectorStatus.locked = false
+    }
   }
 }
 
@@ -269,6 +277,7 @@ export class OCPP16ResponseService extends OCPPResponseService {
           `${chargingStation.logPrefix()} ${moduleName}.handleResponseBootNotification: Emitting '${RegistrationStatusEnumType.ACCEPTED}' event`
         )
         chargingStation.emitChargingStationEvent(ChargingStationEvents.accepted)
+        OCPP16ServiceUtils.resumeRestoredTransactionMeterValues(chargingStation)
       } else if (chargingStation.inPendingState()) {
         logger.debug(
           `${chargingStation.logPrefix()} ${moduleName}.handleResponseBootNotification: Emitting '${RegistrationStatusEnumType.PENDING}' event`
@@ -503,6 +512,10 @@ export class OCPP16ResponseService extends OCPPResponseService {
         connectorId,
         status: OCPP16ChargePointStatus.Charging,
       })
+      // The cable was unplugged at the EV side while StartTransaction was in flight.
+      if (OCPP16ServiceUtils.isEVSideDisconnected(connectorStatus)) {
+        await OCPP16ServiceUtils.handleEVSideDisconnect(chargingStation, connectorId)
+      }
       logger.info(
         `${chargingStation.logPrefix()} ${moduleName}.handleResponseStartTransaction: Transaction with id ${payload.transactionId.toString()} STARTED on ${
           // eslint-disable-next-line @typescript-eslint/restrict-template-expressions

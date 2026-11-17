@@ -2440,8 +2440,15 @@ const buildIdentifiedMeterValue = (
       }
     }
   }
+  // OCPP 1.6 §4.10: no energy transfer while the cable is unplugged at the EV
+  // side during a transaction that is not stopped (StopTransactionOnEVSideDisconnect
+  // false): power and current read 0 and the energy registers do not advance.
+  const evSideDisconnected =
+    identity.transactionId != null &&
+    chargingStation.stationInfo?.ocppVersion === OCPPVersion.VERSION_16 &&
+    connectorStatus?.cablePlugged === false
   // Power.Active.Import measurand
-  const idle = identity.transactionId == null
+  const idle = identity.transactionId == null || evSideDisconnected
   const powerMeasurand = buildPowerMeasurandValue(
     chargingStation,
     connectorId,
@@ -2619,6 +2626,9 @@ const buildIdentifiedMeterValue = (
     true
   )
   let emittedIntervalEnergyWh: number | undefined
+  if (energyMeasurand != null && evSideDisconnected) {
+    energyMeasurand.value = 0
+  }
   if (energyMeasurand != null) {
     const transactionEnergyBeforeBuild =
       connectorStatus?.transactionEnergyActiveImportRegisterValue ?? 0

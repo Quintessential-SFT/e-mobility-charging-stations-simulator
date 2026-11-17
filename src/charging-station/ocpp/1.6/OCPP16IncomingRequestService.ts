@@ -72,6 +72,7 @@ import {
   type OCPP16ChargingSchedule,
   type OCPP16ClearChargingProfileRequest,
   type OCPP16ClearChargingProfileResponse,
+  OCPP16ConfigurationStatus,
   type OCPP16DataTransferRequest,
   type OCPP16DataTransferResponse,
   OCPP16DiagnosticsStatus,
@@ -450,6 +451,16 @@ export class OCPP16IncomingRequestService extends OCPPIncomingRequestService<OCP
     )
     // Handle incoming request events
     this.on(
+      OCPP16IncomingRequestCommand.CHANGE_CONFIGURATION,
+      (
+        chargingStation: ChargingStation,
+        request: ChangeConfigurationRequest,
+        response: ChangeConfigurationResponse
+      ) => {
+        this.applyEVSideDisconnectConfiguration(chargingStation, request.key, response)
+      }
+    )
+    this.on(
       OCPP16IncomingRequestCommand.RESET,
       (chargingStation: ChargingStation, request: ResetRequest, response: GenericResponse) => {
         const action = this.pendingResetActions.get(request)
@@ -489,6 +500,17 @@ export class OCPP16IncomingRequestService extends OCPPIncomingRequestService<OCP
               }#${connectorId.toString()}`,
               chargingProfile
             )
+          }
+          if (OCPP16ServiceUtils.isEVSideDisconnected(connectorStatus)) {
+            OCPP16ServiceUtils.waitForEVSideCablePlugged(chargingStation, connectorId, idTag).catch(
+              (error: unknown) => {
+                logger.error(
+                  `${chargingStation.logPrefix()} ${moduleName}.constructor: Remote start transaction error:`,
+                  error
+                )
+              }
+            )
+            return
           }
           OCPP16ServiceUtils.startTransactionOnConnector(chargingStation, connectorId, idTag)
             .then(response => {
@@ -888,7 +910,9 @@ export class OCPP16IncomingRequestService extends OCPPIncomingRequestService<OCP
     key: string,
     value: string
   ): ConfigurationStatus {
-    return this.handleRequestChangeConfiguration(chargingStation, { key, value }).status
+    const response = this.handleRequestChangeConfiguration(chargingStation, { key, value })
+    this.applyEVSideDisconnectConfiguration(chargingStation, key, response)
+    return response.status
   }
 
   /**
@@ -975,6 +999,38 @@ export class OCPP16IncomingRequestService extends OCPPIncomingRequestService<OCP
       target.cancelled = true
       this.releaseTriggeredMeterValueTarget(undefined, target, true, stationState)
     }
+  }
+
+  /**
+   * Stops the EV side disconnected transactions after an accepted change of
+   * StopTransactionOnEVSideDisconnect to true (OCPP 1.6 §4.10).
+   * @param chargingStation - Target charging station
+   * @param key - Changed configuration key
+   * @param response - ChangeConfiguration response
+   */
+  private applyEVSideDisconnectConfiguration (
+    chargingStation: ChargingStation,
+    key: string,
+    response: ChangeConfigurationResponse
+  ): void {
+    if (
+      response.status !== OCPP16ConfigurationStatus.ACCEPTED ||
+      key.toLowerCase() !==
+        OCPP16StandardParametersKey.StopTransactionOnEVSideDisconnect.toLowerCase() ||
+      !OCPP16ServiceUtils.getStopTransactionOnEVSideDisconnect(chargingStation)
+    ) {
+      return
+    }
+    this.runOutsideIncomingRequestContext(() => {
+      OCPP16ServiceUtils.enforceStopTransactionOnEVSideDisconnect(chargingStation).catch(
+        (error: unknown) => {
+          logger.error(
+            `${chargingStation.logPrefix()} ${moduleName}.applyEVSideDisconnectConfiguration: Error while stopping EV side disconnected transactions:`,
+            error
+          )
+        }
+      )
+    })
   }
 
   /**
@@ -1177,6 +1233,18 @@ export class OCPP16IncomingRequestService extends OCPPIncomingRequestService<OCP
         OCPP16StandardParametersKey.TransactionMessageRetryInterval,
         OCPP16StandardParametersKey.WebSocketPingInterval,
       ])
+      const booleanKeys = new Set([
+        OCPP16StandardParametersKey.StopTransactionOnEVSideDisconnect,
+        OCPP16StandardParametersKey.UnlockConnectorOnEVSideDisconnect,
+      ])
+      if (
+        standardKey != null &&
+        booleanKeys.has(standardKey) &&
+        value.toLowerCase() !== 'true' &&
+        value.toLowerCase() !== 'false'
+      ) {
+        return OCPP16Constants.OCPP_CONFIGURATION_RESPONSE_REJECTED
+      }
       if (standardKey != null && integerKeys.has(standardKey)) {
         // convertToInt would truncate '1.5' → 1 and throw on ''/'abc'; Number() instead yields a non-integer
         // float or NaN that !Number.isInteger rejects, and isNotEmptyString rejects '' (Number('') === 0 would otherwise pass).

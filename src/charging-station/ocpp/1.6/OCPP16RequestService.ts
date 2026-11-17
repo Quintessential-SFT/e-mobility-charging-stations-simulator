@@ -226,12 +226,20 @@ export class OCPP16RequestService extends OCPPRequestService {
     commandParams?: JsonType
   ): Promise<void> {
     switch (commandName) {
-      case OCPP16RequestCommand.START_TRANSACTION:
-        await sendAndSetConnectorStatus(chargingStation, {
-          connectorId: (commandParams as OCPP16StartTransactionRequest).connectorId,
-          status: OCPP16ChargePointStatus.Preparing,
-        })
+      case OCPP16RequestCommand.START_TRANSACTION: {
+        const { connectorId } = commandParams as OCPP16StartTransactionRequest
+        // A remote start that waited for the cable already reported Preparing.
+        if (
+          chargingStation.getConnectorStatus(connectorId)?.status !==
+          OCPP16ChargePointStatus.Preparing
+        ) {
+          await sendAndSetConnectorStatus(chargingStation, {
+            connectorId,
+            status: OCPP16ChargePointStatus.Preparing,
+          })
+        }
         break
+      }
     }
   }
 }

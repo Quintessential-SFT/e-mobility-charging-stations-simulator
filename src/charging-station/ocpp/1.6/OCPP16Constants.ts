@@ -295,6 +295,9 @@ export class OCPP16Constants extends OCPPConstants {
       // { from: OCPP16ChargePointStatus.Faulted, to: OCPP16ChargePointStatus.Faulted }
     ])
 
+  /** StatusNotification `info` when the cable is unplugged at the EV side (OCPP 1.6 §4.9). */
+  static readonly EV_SIDE_DISCONNECTED_INFO = 'EV side disconnected'
+
   static readonly OCPP_DEFAULT_IDTAG = '00000000'
 
   static readonly OCPP_GET_LOCAL_LIST_VERSION_RESPONSE_NOT_SUPPORTED: OCPP16GetLocalListVersionResponse =

@@ -168,6 +168,7 @@ import {
   buildBootNotificationRequest,
   createOCPPServices,
   flushQueuedTransactionMessages,
+  OCPP16ServiceUtils,
   OCPP20ServiceUtils,
   OCPPAuthServiceFactory,
   OCPPConstants,
@@ -1458,6 +1459,15 @@ export class ChargingStation extends EventEmitter {
   }
 
   /**
+   * Plugs the cable in at the EV side of a connector (OCPP 1.6 only).
+   * @param connectorId - Physical connector id
+   */
+  public async plugConnector (connectorId: number): Promise<void> {
+    if (!this.checkEVSideCableConnector(connectorId, 'plugConnector')) return
+    await OCPP16ServiceUtils.plugConnector(this, connectorId)
+  }
+
+  /**
    * Records a request statistic for the given command, but only when statistics
    * collection is enabled on the station (`stationInfo.enableStatistics`).
    * @param command - OCPP command the statistic is recorded against.
@@ -2262,8 +2272,38 @@ export class ChargingStation extends EventEmitter {
     }
   }
 
+  /**
+   * Unplugs the cable at the EV side of a connector (OCPP 1.6 only).
+   * @param connectorId - Physical connector id
+   */
+  public async unplugConnector (connectorId: number): Promise<void> {
+    if (!this.checkEVSideCableConnector(connectorId, 'unplugConnector')) return
+    await OCPP16ServiceUtils.unplugConnector(this, connectorId)
+  }
+
   private add (): void {
     this.emitChargingStationEvent(ChargingStationEvents.added)
+  }
+
+  private checkEVSideCableConnector (connectorId: number, methodName: string): boolean {
+    if (this.stationInfo?.ocppVersion !== OCPPVersion.VERSION_16) {
+      throw new BaseError(
+        `${this.logPrefix()} ${moduleName}.${methodName}: EV side cable simulation is only supported with OCPP 1.6`
+      )
+    }
+    if (connectorId === 0) {
+      logger.warn(
+        `${this.logPrefix()} ${moduleName}.${methodName}: connector id 0 is not a physical connector`
+      )
+      return false
+    }
+    if (!this.hasConnector(connectorId) || this.getConnectorStatus(connectorId) == null) {
+      logger.warn(
+        `${this.logPrefix()} ${moduleName}.${methodName}: connector id ${connectorId.toString()} does not exist`
+      )
+      return false
+    }
+    return true
   }
 
   private clearIntervalFlushMessageBuffer (): void {
@@ -2951,6 +2991,9 @@ export class ChargingStation extends EventEmitter {
     warnOnOCPP16TemplateKeys(this)
     this.initializeOcppConfiguration()
     this.initializeOcppServices()
+    if (this.stationInfo.ocppVersion === OCPPVersion.VERSION_16) {
+      OCPP16ServiceUtils.initializeEVSideCableState(this)
+    }
     const transactionEventRequestValidator = isOCPP20x(this.stationInfo.ocppVersion)
       ? (request: OCPP20TransactionEventRequest): boolean => {
           try {
@@ -3430,6 +3473,16 @@ export class ChargingStation extends EventEmitter {
         StandardParametersKey.ConnectionTimeOut,
         Constants.DEFAULT_EV_CONNECTION_TIMEOUT_SECONDS.toString()
       )
+    }
+    if (this.stationInfo?.ocppVersion === OCPPVersion.VERSION_16) {
+      for (const key of [
+        StandardParametersKey.StopTransactionOnEVSideDisconnect,
+        StandardParametersKey.UnlockConnectorOnEVSideDisconnect,
+      ]) {
+        if (getConfigurationKey(this, key) == null) {
+          addConfigurationKey(this, key, 'true', { readonly: false })
+        }
+      }
     }
     this.saveOcppConfiguration()
   }
