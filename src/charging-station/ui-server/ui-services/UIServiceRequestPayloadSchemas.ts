@@ -213,6 +213,10 @@ const uiServiceRequestPayloadSchemas: Readonly<Record<ProcedureName, z.ZodType>>
   [ProcedureName.NOTIFY_REPORT]: broadcastSchema,
   [ProcedureName.OPEN_CONNECTION]: broadcastSchema,
   [ProcedureName.PERFORMANCE_STATISTICS]: z.looseObject({}),
+  [ProcedureName.PLUG_CONNECTOR]: z.looseObject({
+    ...broadcastFields,
+    connectorId: physicalConnectorIdField,
+  }),
   [ProcedureName.SECURITY_EVENT_NOTIFICATION]: broadcastSchema,
   [ProcedureName.SET_SUPERVISION_URL]: z.looseObject({
     ...broadcastFields,
@@ -259,6 +263,10 @@ const uiServiceRequestPayloadSchemas: Readonly<Record<ProcedureName, z.ZodType>>
   }),
   [ProcedureName.TRANSACTION_EVENT]: broadcastSchema,
   [ProcedureName.UNLOCK_CONNECTOR]: z.looseObject({
+    ...broadcastFields,
+    connectorId: physicalConnectorIdField,
+  }),
+  [ProcedureName.UNPLUG_CONNECTOR]: z.looseObject({
     ...broadcastFields,
     connectorId: physicalConnectorIdField,
   }),

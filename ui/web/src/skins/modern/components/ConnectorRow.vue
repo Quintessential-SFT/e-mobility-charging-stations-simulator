@@ -87,6 +87,12 @@
           locked
         </StatePill>
         <StatePill
+          v-if="cableSimulated && connector.cablePlugged === false"
+          variant="warn"
+        >
+          unplugged
+        </StatePill>
+        <StatePill
           v-if="atgStatus?.start === true"
           variant="ok"
         >
@@ -171,6 +177,14 @@
           </svg>
         </button>
         <ActionButton
+          v-if="cableSimulated"
+          variant="chip"
+          :pending="pending.cable"
+          @click="toggleCable"
+        >
+          {{ connector.cablePlugged === false ? 'Plug' : 'Unplug' }}
+        </ActionButton>
+        <ActionButton
           variant="chip"
           :pending="pending.atg"
           @click="toggleAtg"
@@ -186,7 +200,7 @@
 import {
   type ConnectorStatus,
   OCPP16ChargePointErrorCode,
-  type OCPPVersion,
+  OCPPVersion,
   type Status,
 } from 'ui-common'
 import { computed, ref } from 'vue'
@@ -224,10 +238,12 @@ const emit = defineEmits<{
 const {
   lockConnector,
   pending,
+  plugConnector,
   startATG,
   stopATG,
   stopTransaction: doStopTransaction,
   unlockConnector,
+  unplugConnector,
 } = useConnectorActions({
   connectorId: computed(() => props.connectorId),
   hashId: computed(() => props.hashId),
@@ -274,6 +290,17 @@ const toggleLock = (): void => {
     unlockConnector()
   } else {
     lockConnector()
+  }
+}
+
+// EV side cable plug/unplug is simulated for OCPP 1.6 only.
+const cableSimulated = computed(() => props.ocppVersion === OCPPVersion.VERSION_16)
+
+const toggleCable = (): void => {
+  if (props.connector.cablePlugged === false) {
+    plugConnector()
+  } else {
+    unplugConnector()
   }
 }
 

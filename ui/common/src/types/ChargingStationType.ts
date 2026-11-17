@@ -310,6 +310,7 @@ export interface ConnectorStatus extends JsonObject {
   authorizeIdTag?: string
   availability: AvailabilityType
   bootStatus?: ChargePointStatus
+  cablePlugged?: boolean
   energyActiveImportRegisterValue?: number // In Wh
   errorCode?: OCPP16ChargePointErrorCode
   idTagAuthorized?: boolean

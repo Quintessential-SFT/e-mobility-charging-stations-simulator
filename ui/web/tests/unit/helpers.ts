@@ -20,6 +20,7 @@ export interface MockUIClient {
   lockConnector: ReturnType<typeof vi.fn>
   onRefresh: ReturnType<typeof vi.fn>
   openConnection: ReturnType<typeof vi.fn>
+  plugConnector: ReturnType<typeof vi.fn>
   registerWSEventListener: ReturnType<typeof vi.fn>
   setConfiguration: ReturnType<typeof vi.fn>
   setConnectorStatus: ReturnType<typeof vi.fn>
@@ -34,6 +35,7 @@ export interface MockUIClient {
   stopSimulator: ReturnType<typeof vi.fn>
   stopTransaction: ReturnType<typeof vi.fn>
   unlockConnector: ReturnType<typeof vi.fn>
+  unplugConnector: ReturnType<typeof vi.fn>
   unregisterWSEventListener: ReturnType<typeof vi.fn>
 }
 
@@ -149,6 +151,7 @@ export function createMockUIClient (): MockUIClient {
     // eslint-disable-next-line @typescript-eslint/no-empty-function
     onRefresh: vi.fn().mockReturnValue(() => {}),
     openConnection: vi.fn().mockResolvedValue(successResponse),
+    plugConnector: vi.fn().mockResolvedValue(successResponse),
     registerWSEventListener: vi.fn(),
     setConfiguration: vi.fn(),
     setConnectorStatus: vi.fn().mockResolvedValue(successResponse),
@@ -165,6 +168,7 @@ export function createMockUIClient (): MockUIClient {
     stopSimulator: vi.fn().mockResolvedValue(successResponse),
     stopTransaction: vi.fn().mockResolvedValue(successResponse),
     unlockConnector: vi.fn().mockResolvedValue(successResponse),
+    unplugConnector: vi.fn().mockResolvedValue(successResponse),
     unregisterWSEventListener: vi.fn(),
   }
 }

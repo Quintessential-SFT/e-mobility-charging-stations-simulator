@@ -594,5 +594,21 @@ describe('UIClient', () => {
         hashIds: [TEST_HASH_ID],
       })
     })
+
+    it('should send PLUG_CONNECTOR with hashIds and connectorId', async () => {
+      await client.plugConnector(TEST_HASH_ID, 1)
+      expect(sendRequestSpy).toHaveBeenCalledWith(ProcedureName.PLUG_CONNECTOR, {
+        connectorId: 1,
+        hashIds: [TEST_HASH_ID],
+      })
+    })
+
+    it('should send UNPLUG_CONNECTOR with hashIds and connectorId', async () => {
+      await client.unplugConnector(TEST_HASH_ID, 2)
+      expect(sendRequestSpy).toHaveBeenCalledWith(ProcedureName.UNPLUG_CONNECTOR, {
+        connectorId: 2,
+        hashIds: [TEST_HASH_ID],
+      })
+    })
   })
 })

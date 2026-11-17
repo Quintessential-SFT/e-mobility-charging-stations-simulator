@@ -177,6 +177,37 @@ describe('CSConnector', () => {
       expect(mockClient.unlockConnector).toHaveBeenCalled()
     })
 
+    it('should not show the cable button for a non OCPP 1.6 station', () => {
+      const wrapper = mountConnector({ ocppVersion: OCPPVersion.VERSION_201 })
+      expect(wrapper.findAllComponents(StateButtonStub)).toHaveLength(2)
+    })
+
+    it('should call plugConnector for an unplugged OCPP 1.6 connector', async () => {
+      const wrapper = mountConnector({
+        connectorOverrides: { cablePlugged: false },
+        ocppVersion: OCPPVersion.VERSION_16,
+      })
+      const stateButtons = wrapper.findAllComponents(StateButtonStub)
+      expect(stateButtons).toHaveLength(3)
+      const cableProps = stateButtons[1].props() as unknown as StubProps
+      cableProps.on?.()
+      await flushPromises()
+      expect(mockClient.plugConnector).toHaveBeenCalled()
+    })
+
+    it('should call unplugConnector for a plugged OCPP 1.6 connector', async () => {
+      const wrapper = mountConnector({
+        connectorOverrides: { cablePlugged: true },
+        ocppVersion: OCPPVersion.VERSION_16,
+      })
+      const cableProps = wrapper
+        .findAllComponents(StateButtonStub)[1]
+        .props() as unknown as StubProps
+      cableProps.off?.()
+      await flushPromises()
+      expect(mockClient.unplugConnector).toHaveBeenCalled()
+    })
+
     it('should show Start Transaction toggle when no transaction', () => {
       const wrapper = mountConnector({
         connectorOverrides: { transactionStarted: false },
@@ -219,7 +250,7 @@ describe('CSConnector', () => {
     it('should call startAutomaticTransactionGenerator', async () => {
       const wrapper = mountConnector({ connectorId: 3 })
       const stateButtons = wrapper.findAllComponents(StateButtonStub)
-      const atgStartProps = stateButtons[1].props() as unknown as StubProps
+      const atgStartProps = stateButtons[stateButtons.length - 1].props() as unknown as StubProps
       atgStartProps.on?.()
       await flushPromises()
       expect(mockClient.startAutomaticTransactionGenerator).toHaveBeenCalled()
@@ -228,7 +259,7 @@ describe('CSConnector', () => {
     it('should call stopAutomaticTransactionGenerator', async () => {
       const wrapper = mountConnector({ atgStatus: { start: true }, connectorId: 3 })
       const stateButtons = wrapper.findAllComponents(StateButtonStub)
-      const atgStopProps = stateButtons[1].props() as unknown as StubProps
+      const atgStopProps = stateButtons[stateButtons.length - 1].props() as unknown as StubProps
       atgStopProps.off?.()
       await flushPromises()
       expect(mockClient.stopAutomaticTransactionGenerator).toHaveBeenCalled()
