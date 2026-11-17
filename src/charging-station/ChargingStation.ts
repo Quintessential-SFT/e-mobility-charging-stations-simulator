@@ -141,6 +141,7 @@ import {
   checkStationInfoConnectorStatus,
   createSerialNumber,
   getAmperageLimitationUnitDivider,
+  getBootChargePointStatus,
   getBootConnectorStatus,
   getChargingStationChargingProfilesLimit,
   getChargingStationId,
@@ -4721,6 +4722,26 @@ export class ChargingStation extends EventEmitter {
     }
     if (this.heartbeatSetInterval == null) {
       this.startHeartbeat()
+    }
+    // OCPP 1.6 errata 3.22: after BootNotification.conf Accepted, send
+    // StatusNotification for connectorId 0 (the Charge Point as a whole)
+    // and then for every connector. Connector 0 is reported first so a
+    // CSMS that also aggregates connector statuses is not overwritten.
+    // The notification is sent without changing connector 0's local status,
+    // which may be Reserved for a station-wide reservation.
+    if (this.stationInfo?.ocppVersion === OCPPVersion.VERSION_16) {
+      const chargePointStatus = this.getConnectorStatus(0)
+      if (chargePointStatus != null) {
+        await this.ocppRequestService.requestHandler(
+          this,
+          RequestCommand.STATUS_NOTIFICATION,
+          {
+            connectorId: 0,
+            status: getBootChargePointStatus(this, chargePointStatus),
+          },
+          { responseTimeoutMs }
+        )
+      }
     }
     for (const { connectorId, connectorStatus, evseId } of this.iterateConnectors(true)) {
       const bootStatus = getBootConnectorStatus(this, connectorId, connectorStatus)

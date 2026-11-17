@@ -46,6 +46,7 @@ export {
 export {
   buildConnectorsMap,
   checkStationInfoConnectorStatus,
+  getBootChargePointStatus,
   getBootConnectorStatus,
   initializeConnectorsMapStatus,
   prepareConnectorStatus,
