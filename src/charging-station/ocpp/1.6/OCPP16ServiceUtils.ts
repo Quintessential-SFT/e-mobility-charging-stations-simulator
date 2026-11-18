@@ -6,6 +6,7 @@ import {
   isAfter,
   isBefore,
   isWithinInterval,
+  secondsToMilliseconds,
 } from 'date-fns'
 
 import {
@@ -27,8 +28,10 @@ import {
 import { BaseError, OCPPError } from '../../../exception/index.js'
 import { OCPP_SCHEMA_SUBDIR } from '../../../resolveAssetsDir.js'
 import {
+  ChargingStationEvents,
   type ConfigurationKey,
   type ConnectorStatus,
+  type ConnectorStatusEnum,
   ErrorType,
   type GenericResponse,
   type MeterValue,
@@ -37,6 +40,7 @@ import {
   OCPP16AuthorizationStatus,
   type OCPP16AvailabilityType,
   type OCPP16ChangeAvailabilityResponse,
+  OCPP16ChargePointErrorCode,
   OCPP16ChargePointStatus,
   type OCPP16ChargingProfile,
   type OCPP16ChargingSchedule,
@@ -63,6 +67,7 @@ import {
   type RequestParams,
   type StartTransactionRequest,
   type StartTransactionResponse,
+  type StatusNotificationOptions,
   type StopTransactionReason,
   type StopTransactionRequest,
   type StopTransactionResponse,
@@ -83,7 +88,10 @@ import {
   truncateId,
 } from '../../../utils/index.js'
 import { mapOCPP16Status, OCPPAuthServiceFactory } from '../auth/index.js'
-import { sendAndSetConnectorStatus } from '../OCPPConnectorStatusOperations.js'
+import {
+  sendAndSetConnectorStatus,
+  sendPostTransactionStatus,
+} from '../OCPPConnectorStatusOperations.js'
 import {
   assertMeterValueBuilderResult,
   buildEmptyMeterValue,
@@ -236,6 +244,11 @@ export class OCPP16ServiceUtils {
     [OCPP16RequestCommand.STOP_TRANSACTION, 'StopTransaction'],
   ]
 
+  private static readonly pendingRemoteStartTransactions = new WeakMap<
+    ConnectorStatus,
+    { idTag: string; timeout?: NodeJS.Timeout }
+  >()
+
   private static readonly periodicMeterValuesIntervals = new WeakMap<ConnectorStatus, number>()
 
   private static readonly startTransactionOperations = new WeakMap<
@@ -320,7 +333,7 @@ export class OCPP16ServiceUtils {
   public static buildStatusNotificationRequest (
     commandParams: OCPP16StatusNotificationRequestParams
   ): OCPP16StatusNotificationRequest {
-    const { connectorId, errorCode } = commandParams
+    const { connectorId, errorCode, info } = commandParams
     const status = commandParams.connectorStatus ?? commandParams.status
     if (status == null || !isOCPP16ChargePointStatus(status)) {
       throw new OCPPError(
@@ -334,6 +347,7 @@ export class OCPP16ServiceUtils {
       // OCPP 2.0.1 has no errorCode; the 1.6 request service supplies NO_ERROR
       // before calling this builder.
       errorCode,
+      ...(info != null && { info }),
       status,
     } satisfies OCPP16StatusNotificationRequest
   }
@@ -865,6 +879,50 @@ export class OCPP16ServiceUtils {
   ][] => createPayloadConfigs(OCPP16ServiceUtils.outgoingRequestSchemaNames, 'Response.json')
 
   /**
+   * Stops, with reason `EVDisconnected`, the running transactions whose cable is
+   * unplugged at the EV side when StopTransactionOnEVSideDisconnect is true.
+   * Applied after the key changes: the rule holds on the unplugged state, not only
+   * on the unplug edge (OCPP 1.6 §4.10).
+   * @param chargingStation - Target charging station
+   */
+  public static async enforceStopTransactionOnEVSideDisconnect (
+    chargingStation: ChargingStation
+  ): Promise<void> {
+    const stops: Promise<void>[] = []
+    for (const { connectorId, connectorStatus } of chargingStation.iterateConnectors(true)) {
+      if (
+        connectorStatus.transactionStarted === true &&
+        OCPP16ServiceUtils.isEVSideDisconnected(connectorStatus)
+      ) {
+        stops.push(OCPP16ServiceUtils.handleEVSideDisconnect(chargingStation, connectorId))
+      }
+    }
+    await Promise.all(stops)
+  }
+
+  /**
+   * @param connectorStatus - Connector status
+   * @param status - Status about to be reported
+   * @returns The StatusNotification error code and info of a SuspendedEV status caused by an unplugged cable during a transaction
+   */
+  public static getEVSideDisconnectedStatusFields (
+    connectorStatus: ConnectorStatus | undefined,
+    status: ConnectorStatusEnum | undefined
+  ): Pick<StatusNotificationOptions, 'errorCode' | 'info'> {
+    if (
+      status === OCPP16ChargePointStatus.SuspendedEV &&
+      connectorStatus?.transactionStarted === true &&
+      OCPP16ServiceUtils.isEVSideDisconnected(connectorStatus)
+    ) {
+      return {
+        errorCode: OCPP16ChargePointErrorCode.NO_ERROR,
+        info: OCPP16Constants.EV_SIDE_DISCONNECTED_INFO,
+      }
+    }
+    return {}
+  }
+
+  /**
    * Gets the OCPP 1.6 StartTransaction currently in flight on a connector.
    * Shutdown awaits it before deciding whether the accepted transaction needs a StopTransaction.
    * @param connectorStatus - Connector whose pending start is queried
@@ -874,6 +932,73 @@ export class OCPP16ServiceUtils {
     connectorStatus: ConnectorStatus
   ): Promise<StartTransactionResponse> | undefined {
     return OCPP16ServiceUtils.startTransactionOperations.get(connectorStatus)
+  }
+
+  /**
+   * Reads StopTransactionOnEVSideDisconnect. A missing key is treated as `true`.
+   * @param chargingStation - Target charging station
+   * @returns Whether an EV side disconnect stops the running transaction
+   */
+  public static getStopTransactionOnEVSideDisconnect (chargingStation: ChargingStation): boolean {
+    const key = getConfigurationKey(
+      chargingStation,
+      OCPP16StandardParametersKey.StopTransactionOnEVSideDisconnect
+    )
+    return key?.value == null || convertToBoolean(key.value)
+  }
+
+  /**
+   * Reads UnlockConnectorOnEVSideDisconnect. A missing key is treated as `true`.
+   * @param chargingStation - Target charging station
+   * @returns Whether an EV side disconnect unlocks the connector
+   */
+  public static getUnlockConnectorOnEVSideDisconnect (chargingStation: ChargingStation): boolean {
+    const key = getConfigurationKey(
+      chargingStation,
+      OCPP16StandardParametersKey.UnlockConnectorOnEVSideDisconnect
+    )
+    return key?.value == null || convertToBoolean(key.value)
+  }
+
+  /**
+   * Applies an EV side disconnect to a running transaction (OCPP 1.6 §4.9, §4.10):
+   * StopTransactionOnEVSideDisconnect true stops it with reason `EVDisconnected`;
+   * false keeps it running, reports `SuspendedEV` and keeps the connector locked.
+   * @param chargingStation - Target charging station
+   * @param connectorId - Connector identifier
+   */
+  public static async handleEVSideDisconnect (
+    chargingStation: ChargingStation,
+    connectorId: number
+  ): Promise<void> {
+    const connectorStatus = chargingStation.getConnectorStatus(connectorId)
+    if (
+      connectorStatus?.transactionStarted !== true ||
+      connectorStatus.transactionEnding === true ||
+      !OCPP16ServiceUtils.isEVSideDisconnected(connectorStatus)
+    ) {
+      return
+    }
+    if (OCPP16ServiceUtils.getStopTransactionOnEVSideDisconnect(chargingStation)) {
+      await OCPP16ServiceUtils.stopTransactionOnConnector(
+        chargingStation,
+        connectorId,
+        OCPP16StopTransactionReason.EV_DISCONNECTED
+      )
+      return
+    }
+    if (connectorStatus.status !== OCPP16ChargePointStatus.SuspendedEV) {
+      await sendAndSetConnectorStatus(
+        chargingStation,
+        {
+          connectorId,
+          errorCode: OCPP16ChargePointErrorCode.NO_ERROR,
+          info: OCPP16Constants.EV_SIDE_DISCONNECTED_INFO,
+          status: OCPP16ChargePointStatus.SuspendedEV,
+        },
+        { expectedTransactionId: connectorStatus.transactionId, send: true }
+      )
+    }
   }
 
   /**
@@ -911,6 +1036,34 @@ export class OCPP16ServiceUtils {
   }
 
   /**
+   * Sets the boot cable state: connectors start unplugged, except a connector
+   * with a restored open transaction. Its persisted cable state is kept: a cable
+   * unplugged at shutdown comes back unplugged in SuspendedEV (meter frozen,
+   * connector locked), otherwise it comes back plugged in Charging.
+   * @param chargingStation - Target charging station
+   */
+  public static initializeEVSideCableState (chargingStation: ChargingStation): void {
+    for (const { connectorStatus } of chargingStation.iterateConnectors(true)) {
+      if (connectorStatus.transactionStarted !== true) {
+        connectorStatus.cablePlugged = false
+        continue
+      }
+      if (OCPP16ServiceUtils.isEVSideDisconnected(connectorStatus)) {
+        connectorStatus.status = OCPP16ChargePointStatus.SuspendedEV
+        continue
+      }
+      connectorStatus.cablePlugged = true
+      // A graceful stop clears the status: a restored transaction boots back into Charging.
+      if (
+        connectorStatus.status == null ||
+        connectorStatus.status === OCPP16ChargePointStatus.SuspendedEV
+      ) {
+        connectorStatus.status = OCPP16ChargePointStatus.Charging
+      }
+    }
+  }
+
+  /**
    * Determines whether a configuration key should be visible in GetConfiguration responses.
    * @param key - Configuration key to check
    * @returns Whether the key is visible
@@ -920,6 +1073,51 @@ export class OCPP16ServiceUtils {
       return true
     }
     return key.visible
+  }
+
+  /**
+   * @param connectorStatus - Connector status
+   * @returns Whether the cable is unplugged at the EV side. An unset state is plugged.
+   */
+  public static isEVSideDisconnected (connectorStatus: ConnectorStatus | undefined): boolean {
+    return connectorStatus?.cablePlugged === false
+  }
+
+  /**
+   * Whether a connector stays in `Finishing` after its transaction stopped: the
+   * stop reason is `EVDisconnected`, UnlockConnectorOnEVSideDisconnect is false so
+   * the cable stays locked at the Charge Point, and no new transaction exists.
+   * Only UnlockConnector (§4.9 F1, `Available`) or a new start (F2, `Preparing`)
+   * leaves this state (§7.7: a locked cable is not available for a new user).
+   * @param connectorStatus - Connector status
+   * @returns Whether the connector is in the locked post EV side disconnect `Finishing` state
+   */
+  public static isFinishingAfterEVSideDisconnect (
+    connectorStatus: ConnectorStatus | undefined
+  ): boolean {
+    return (
+      connectorStatus?.status === OCPP16ChargePointStatus.Finishing &&
+      connectorStatus.locked === true &&
+      connectorStatus.transactionStarted !== true &&
+      connectorStatus.transactionStarting !== true
+    )
+  }
+
+  /**
+   * Whether a StopTransaction leaves the connector locked (OCPP 1.6 §4.10): the
+   * reason is `EVDisconnected` and UnlockConnectorOnEVSideDisconnect is false.
+   * @param chargingStation - Target charging station
+   * @param reason - StopTransaction reason
+   * @returns Whether the connector stays locked after the stop
+   */
+  public static isLockedAfterEVSideDisconnectStop (
+    chargingStation: ChargingStation,
+    reason: OCPP16StopTransactionReason | undefined
+  ): boolean {
+    return (
+      reason === OCPP16StopTransactionReason.EV_DISCONNECTED &&
+      !OCPP16ServiceUtils.getUnlockConnectorOnEVSideDisconnect(chargingStation)
+    )
   }
 
   /**
@@ -957,6 +1155,65 @@ export class OCPP16ServiceUtils {
   }
 
   /**
+   * Plugs the cable in at the EV side: starts a remote start waiting for the
+   * cable, resumes a transaction suspended by an EV side disconnect
+   * (`SuspendedEV` → `Charging`), or reports `Preparing` on an `Available`
+   * connector or on a connector kept in `Finishing` after an EV side disconnect
+   * stop (§4.9 F2). The stopped transaction never resumes: charging needs a new
+   * authorization and StartTransaction.
+   * @param chargingStation - Target charging station
+   * @param connectorId - Connector identifier
+   */
+  public static async plugConnector (
+    chargingStation: ChargingStation,
+    connectorId: number
+  ): Promise<void> {
+    const connectorStatus = chargingStation.getConnectorStatus(connectorId)
+    if (connectorStatus == null || !OCPP16ServiceUtils.isEVSideDisconnected(connectorStatus)) {
+      return
+    }
+    connectorStatus.cablePlugged = true
+    chargingStation.emitChargingStationEvent(ChargingStationEvents.connectorStatusChanged, {
+      connectorId,
+      ...connectorStatus,
+    })
+    const pendingRemoteStart =
+      OCPP16ServiceUtils.pendingRemoteStartTransactions.get(connectorStatus)
+    if (pendingRemoteStart != null) {
+      OCPP16ServiceUtils.clearPendingRemoteStartTransaction(connectorStatus)
+      await OCPP16ServiceUtils.startTransactionOnConnector(
+        chargingStation,
+        connectorId,
+        pendingRemoteStart.idTag
+      )
+      return
+    }
+    if (connectorStatus.transactionStarted === true) {
+      if (
+        connectorStatus.transactionEnding !== true &&
+        connectorStatus.status === OCPP16ChargePointStatus.SuspendedEV
+      ) {
+        await sendAndSetConnectorStatus(
+          chargingStation,
+          { connectorId, status: OCPP16ChargePointStatus.Charging },
+          { expectedTransactionId: connectorStatus.transactionId, send: true }
+        )
+      }
+      return
+    }
+    if (
+      (connectorStatus.transactionStarting !== true &&
+        connectorStatus.status === OCPP16ChargePointStatus.Available) ||
+      OCPP16ServiceUtils.isFinishingAfterEVSideDisconnect(connectorStatus)
+    ) {
+      await sendAndSetConnectorStatus(chargingStation, {
+        connectorId,
+        status: OCPP16ChargePointStatus.Preparing,
+      })
+    }
+  }
+
+  /**
    * Stops a transaction remotely on the given connector.
    * @param chargingStation - Target charging station
    * @param connectorId - Connector identifier with the active transaction
@@ -975,6 +1232,31 @@ export class OCPP16ServiceUtils {
       return OCPP16Constants.OCPP_RESPONSE_ACCEPTED
     }
     return OCPP16Constants.OCPP_RESPONSE_REJECTED
+  }
+
+  /**
+   * Restarts the periodic MeterValues of transactions restored from the persisted state.
+   * Connectors that already send MeterValues are left alone, so a new BootNotification is harmless.
+   * @param chargingStation - Target charging station
+   */
+  public static resumeRestoredTransactionMeterValues (chargingStation: ChargingStation): void {
+    const configuredMeterValueSampleInterval = getConfigurationKey(
+      chargingStation,
+      OCPP16StandardParametersKey.MeterValueSampleInterval
+    )
+    const interval =
+      configuredMeterValueSampleInterval != null
+        ? secondsToMilliseconds(convertToInt(configuredMeterValueSampleInterval.value))
+        : Constants.DEFAULT_METER_VALUES_INTERVAL_MS
+    for (const { connectorId, connectorStatus } of chargingStation.iterateConnectors(true)) {
+      if (
+        connectorStatus.transactionStarted === true &&
+        connectorStatus.transactionId != null &&
+        connectorStatus.transactionUpdatedMeterValuesSetInterval == null
+      ) {
+        OCPP16ServiceUtils.startUpdatedMeterValues(chargingStation, connectorId, interval)
+      }
+    }
   }
 
   /**
@@ -1047,7 +1329,14 @@ export class OCPP16ServiceUtils {
     requestOverrides: Omit<Partial<StartTransactionRequest>, 'connectorId' | 'idTag'> = {}
   ): Promise<StartTransactionResponse> {
     const connectorStatus = chargingStation.getConnectorStatus(connectorId)
-    if (connectorStatus != null) connectorStatus.transactionStarting = true
+    if (connectorStatus != null) {
+      OCPP16ServiceUtils.clearPendingRemoteStartTransaction(connectorStatus)
+      // A local (UI, ATG) start implies the cable is plugged at the EV side.
+      if (OCPP16ServiceUtils.isEVSideDisconnected(connectorStatus)) {
+        connectorStatus.cablePlugged = true
+      }
+      connectorStatus.transactionStarting = true
+    }
     const operation = chargingStation.ocppRequestService.requestHandler<
       Partial<StartTransactionRequest>,
       StartTransactionResponse
@@ -1697,6 +1986,10 @@ export class OCPP16ServiceUtils {
             {
               connectorId,
               status: OCPP16ChargePointStatus.Finishing,
+              ...(validatedStopReason === OCPP16StopTransactionReason.EV_DISCONNECTED && {
+                errorCode: OCPP16ChargePointErrorCode.NO_ERROR,
+                info: OCPP16Constants.EV_SIDE_DISCONNECTED_INFO,
+              }),
             },
             { expectedTransactionId: rawTransactionId, send: true }
           )
@@ -1963,6 +2256,37 @@ export class OCPP16ServiceUtils {
     }
   }
 
+  /**
+   * Unplugs the cable at the EV side: applies {@link handleEVSideDisconnect} to a
+   * running transaction, or reports `Available` on a `Preparing` connector.
+   * @param chargingStation - Target charging station
+   * @param connectorId - Connector identifier
+   */
+  public static async unplugConnector (
+    chargingStation: ChargingStation,
+    connectorId: number
+  ): Promise<void> {
+    const connectorStatus = chargingStation.getConnectorStatus(connectorId)
+    if (connectorStatus == null || OCPP16ServiceUtils.isEVSideDisconnected(connectorStatus)) {
+      return
+    }
+    connectorStatus.cablePlugged = false
+    chargingStation.emitChargingStationEvent(ChargingStationEvents.connectorStatusChanged, {
+      connectorId,
+      ...connectorStatus,
+    })
+    if (connectorStatus.transactionStarted === true) {
+      await OCPP16ServiceUtils.handleEVSideDisconnect(chargingStation, connectorId)
+      return
+    }
+    if (
+      connectorStatus.transactionStarting !== true &&
+      connectorStatus.status === OCPP16ChargePointStatus.Preparing
+    ) {
+      await sendPostTransactionStatus(chargingStation, connectorId)
+    }
+  }
+
   public static updateAuthorizationCache (
     chargingStation: ChargingStation,
     idTag: string,
@@ -1976,6 +2300,53 @@ export class OCPP16ServiceUtils {
         `${chargingStation.logPrefix()} ${moduleName}.updateAuthorizationCache: Cache update failed for '${truncateId(idTag)}':`,
         error
       )
+    }
+  }
+
+  /**
+   * Defers an accepted remote start until the cable is plugged in at the EV side.
+   * The connector reports `Preparing`; when ConnectionTimeOut (> 0) elapses first,
+   * the pending start is cancelled and the connector reports `Available`.
+   * @param chargingStation - Target charging station
+   * @param connectorId - Connector identifier
+   * @param idTag - Remote start idTag
+   */
+  public static async waitForEVSideCablePlugged (
+    chargingStation: ChargingStation,
+    connectorId: number,
+    idTag: string
+  ): Promise<void> {
+    const connectorStatus = chargingStation.getConnectorStatus(connectorId)
+    if (connectorStatus == null) return
+    OCPP16ServiceUtils.clearPendingRemoteStartTransaction(connectorStatus)
+    const pendingRemoteStart: { idTag: string; timeout?: NodeJS.Timeout } = { idTag }
+    const connectionTimeout = chargingStation.getConnectionTimeout()
+    if (connectionTimeout > 0) {
+      pendingRemoteStart.timeout = setTimeout(
+        () => {
+          OCPP16ServiceUtils.expirePendingRemoteStartTransaction(
+            chargingStation,
+            connectorId,
+            pendingRemoteStart
+          ).catch((error: unknown) => {
+            logger.error(
+              `${chargingStation.logPrefix()} ${moduleName}.waitForEVSideCablePlugged: Error while cancelling remote start on connector ${connectorId.toString()}:`,
+              error
+            )
+          })
+        },
+        clampToSafeTimerValue(secondsToMilliseconds(connectionTimeout))
+      )
+    }
+    OCPP16ServiceUtils.pendingRemoteStartTransactions.set(connectorStatus, pendingRemoteStart)
+    logger.info(
+      `${chargingStation.logPrefix()} ${moduleName}.waitForEVSideCablePlugged: Remote start on connector ${connectorId.toString()} for idTag '${truncateId(idTag)}' waits for the cable (ConnectionTimeOut ${connectionTimeout.toString()}s)`
+    )
+    if (connectorStatus.status !== OCPP16ChargePointStatus.Preparing) {
+      await sendAndSetConnectorStatus(chargingStation, {
+        connectorId,
+        status: OCPP16ChargePointStatus.Preparing,
+      })
     }
   }
 
@@ -2121,6 +2492,14 @@ export class OCPP16ServiceUtils {
     return enrichedMeterValue
   }
 
+  private static clearPendingRemoteStartTransaction (connectorStatus: ConnectorStatus): void {
+    const pendingRemoteStart =
+      OCPP16ServiceUtils.pendingRemoteStartTransactions.get(connectorStatus)
+    if (pendingRemoteStart == null) return
+    clearTimeout(pendingRemoteStart.timeout)
+    OCPP16ServiceUtils.pendingRemoteStartTransactions.delete(connectorStatus)
+  }
+
   private static readonly composeChargingSchedule = (
     chargingSchedule: OCPP16ChargingSchedule,
     compositeInterval: Interval
@@ -2188,6 +2567,34 @@ export class OCPP16ServiceUtils {
         }
       }
       return chargingSchedule
+    }
+  }
+
+  private static async expirePendingRemoteStartTransaction (
+    chargingStation: ChargingStation,
+    connectorId: number,
+    pendingRemoteStart: { idTag: string; timeout?: NodeJS.Timeout }
+  ): Promise<void> {
+    const connectorStatus = chargingStation.getConnectorStatus(connectorId)
+    if (
+      connectorStatus == null ||
+      OCPP16ServiceUtils.pendingRemoteStartTransactions.get(connectorStatus) !== pendingRemoteStart
+    ) {
+      return
+    }
+    OCPP16ServiceUtils.pendingRemoteStartTransactions.delete(connectorStatus)
+    if (
+      connectorStatus.transactionStarted === true ||
+      connectorStatus.transactionStarting === true
+    ) {
+      return
+    }
+    logger.info(
+      `${chargingStation.logPrefix()} ${moduleName}.expirePendingRemoteStartTransaction: Remote start on connector ${connectorId.toString()} for idTag '${truncateId(pendingRemoteStart.idTag)}' cancelled, cable not plugged within ConnectionTimeOut`
+    )
+    connectorStatus.transactionRemoteStarted = false
+    if (chargingStation.started && connectorStatus.status === OCPP16ChargePointStatus.Preparing) {
+      await sendPostTransactionStatus(chargingStation, connectorId)
     }
   }
 

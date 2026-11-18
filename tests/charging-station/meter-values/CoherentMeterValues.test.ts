@@ -27,6 +27,7 @@ import type {
 import {
   computeCoherentSample,
   disposeCoherentSessionRuntime,
+  getCoherentSampleSnapshot,
 } from '../../../src/charging-station/meter-values/CoherentSampleComputer.js'
 import {
   buildCoherentMeterValue,
@@ -2459,6 +2460,147 @@ await describe('CoherentMeterValues', async () => {
         Math.abs(threeQuarterRatio - 0.75) < rampTolerance,
         `linear ramp must be 0.75 at t=3T/4: got ${threeQuarterRatio.toString()}`
       )
+    })
+  })
+
+  await describe('unplugged open transaction', async () => {
+    const sampleOptions = (nowMs: number) => ({
+      intervalMs: TEST_METER_VALUES_INTERVAL_MS,
+      nowMs,
+      rootSeed: 42,
+      voltageNoise: false,
+    })
+
+    const startCharging = (): {
+      connectorStatus: ConnectorStatus
+      context: ICoherentContext
+      session: CoherentSession
+    } => {
+      const { connectorStatus, context, sessions } = buildContext({
+        currentType: CurrentType.AC,
+        evseMaxPowerW: 7400,
+        numberOfPhases: 1,
+        voltageOut: Voltage.VOLTAGE_230,
+      })
+      connectorStatus.cablePlugged = true
+      const session = createSessionOrFail(context, {
+        connectorId: 1,
+        now: 0,
+        profiles: [baseProfile],
+        rampUpDurationMs: 0,
+        rootSeed: 42,
+        transactionId: 1,
+      })
+      sessions.set(1, session)
+      return { connectorStatus, context, session }
+    }
+
+    await it('should freeze energy and report zero power while unplugged, then resume', () => {
+      const { connectorStatus, context, session } = startCharging()
+      const plugged = computeCoherentSample(
+        context,
+        connectorStatus,
+        session,
+        sampleOptions(TEST_METER_VALUES_INTERVAL_MS)
+      )
+      assert.ok(plugged.powerW > 0)
+      assert.ok(plugged.deltaEnergyWh > 0)
+      const energyAfterPlug = plugged.energyRegisterWh
+      const socAfterPlug = session.socPercent
+
+      connectorStatus.transactionEnergyActiveImportRegisterValue = energyAfterPlug
+      connectorStatus.cablePlugged = false
+      const unplugged = computeCoherentSample(
+        context,
+        connectorStatus,
+        session,
+        sampleOptions(TEST_METER_VALUES_INTERVAL_MS * 2)
+      )
+      assert.strictEqual(unplugged.powerW, 0)
+      assert.strictEqual(unplugged.currentA, 0)
+      assert.strictEqual(unplugged.deltaEnergyWh, 0)
+      assert.strictEqual(unplugged.energyRegisterWh, energyAfterPlug)
+      assert.strictEqual(session.socPercent, socAfterPlug)
+
+      const stillUnplugged = computeCoherentSample(
+        context,
+        connectorStatus,
+        session,
+        sampleOptions(TEST_METER_VALUES_INTERVAL_MS * 3)
+      )
+      assert.strictEqual(stillUnplugged.powerW, 0)
+      assert.strictEqual(stillUnplugged.energyRegisterWh, energyAfterPlug)
+      assert.strictEqual(session.socPercent, socAfterPlug)
+
+      connectorStatus.cablePlugged = true
+      const resumed = computeCoherentSample(
+        context,
+        connectorStatus,
+        session,
+        sampleOptions(TEST_METER_VALUES_INTERVAL_MS * 4)
+      )
+      assert.ok(resumed.powerW > 0)
+      assert.ok(resumed.deltaEnergyWh > 0)
+      assert.ok(resumed.energyRegisterWh > energyAfterPlug)
+      assert.ok(session.socPercent > socAfterPlug)
+    })
+
+    await it('should snapshot zero power while unplugged even after a charging sample', () => {
+      const { connectorStatus, context, session } = startCharging()
+      const plugged = computeCoherentSample(
+        context,
+        connectorStatus,
+        session,
+        sampleOptions(TEST_METER_VALUES_INTERVAL_MS)
+      )
+      assert.ok(plugged.powerW > 0)
+      connectorStatus.transactionEnergyActiveImportRegisterValue = plugged.energyRegisterWh
+      connectorStatus.cablePlugged = false
+      const snapshot = getCoherentSampleSnapshot(context, connectorStatus, session)
+      assert.strictEqual(snapshot.powerW, 0)
+      assert.strictEqual(snapshot.currentA, 0)
+      assert.strictEqual(snapshot.deltaEnergyWh, 0)
+      assert.strictEqual(snapshot.energyRegisterWh, plugged.energyRegisterWh)
+    })
+
+    await it('should not advance the energy register in buildCoherentMeterValue while unplugged', () => {
+      const { connectorStatus, context, session } = startCharging()
+      connectorStatus.MeterValues = [
+        {
+          measurand: MeterValueMeasurand.ENERGY_ACTIVE_IMPORT_REGISTER,
+          unit: MeterValueUnit.WATT_HOUR,
+        },
+        {
+          measurand: MeterValueMeasurand.POWER_ACTIVE_IMPORT,
+          unit: MeterValueUnit.WATT,
+        },
+      ]
+      buildCoherentMeterValue(context, session, passThroughBuilder, {
+        intervalMs: 3_600_000,
+        nowMs: 3_600_000,
+        rootSeed: 42,
+        voltageNoise: false,
+      })
+      const energyAfterPlug = connectorStatus.transactionEnergyActiveImportRegisterValue ?? 0
+      assert.ok(energyAfterPlug > 0)
+
+      connectorStatus.cablePlugged = false
+      const meterValue = buildCoherentMeterValue(context, session, passThroughBuilder, {
+        intervalMs: 3_600_000,
+        nowMs: 7_200_000,
+        rootSeed: 42,
+        voltageNoise: false,
+      })
+      const power = meterValue.sampledValue.find(
+        value => value.measurand === MeterValueMeasurand.POWER_ACTIVE_IMPORT
+      )
+      assert.ok(power != null)
+      assert.strictEqual(Number(power.value), 0)
+      assert.strictEqual(
+        connectorStatus.transactionEnergyActiveImportRegisterValue,
+        energyAfterPlug
+      )
+      assert.strictEqual(connectorStatus.energyActiveImportRegisterValue, energyAfterPlug)
     })
   })
 })

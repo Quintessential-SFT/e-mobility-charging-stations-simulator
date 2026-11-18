@@ -18,6 +18,8 @@ export interface ConnectorStatus {
   authorizeIdTag?: string
   availability: AvailabilityType
   bootStatus?: ConnectorStatusEnum
+  /** OCPP 1.6: whether the cable is plugged at the EV side. `undefined` is treated as plugged. */
+  cablePlugged?: boolean
   chargingProfiles?: ChargingProfile[]
   energyActiveImportIntervalBaselines?: Record<string, number> // In Wh
   energyActiveImportRegisterValue?: number // In Wh

@@ -19,6 +19,7 @@ export enum BroadcastChannelProcedureName {
   NOTIFY_CUSTOMER_INFORMATION = 'notifyCustomerInformation',
   NOTIFY_REPORT = 'notifyReport',
   OPEN_CONNECTION = 'openConnection',
+  PLUG_CONNECTOR = 'plugConnector',
   SECURITY_EVENT_NOTIFICATION = 'securityEventNotification',
   SET_SUPERVISION_URL = 'setSupervisionUrl',
   SIGN_CERTIFICATE = 'signCertificate',
@@ -31,6 +32,7 @@ export enum BroadcastChannelProcedureName {
   STOP_TRANSACTION = 'stopTransaction',
   TRANSACTION_EVENT = 'transactionEvent',
   UNLOCK_CONNECTOR = 'unlockConnector',
+  UNPLUG_CONNECTOR = 'unplugConnector',
 }
 
 export type BroadcastChannelRequest = [

@@ -190,6 +190,8 @@ evse-cli connection close [hashId...]  # Close WebSocket connection to CSMS
 ```shell
 evse-cli connector lock --connector-id <id> [hashId...]    # Lock connector
 evse-cli connector unlock --connector-id <id> [hashId...]  # Unlock connector
+evse-cli connector plug --connector-id <id> [hashId...]    # Plug cable at the EV side (OCPP 1.6)
+evse-cli connector unplug --connector-id <id> [hashId...]  # Unplug cable at the EV side (OCPP 1.6)
 ```
 
 #### atg

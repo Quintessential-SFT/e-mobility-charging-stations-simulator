@@ -234,6 +234,17 @@ export class ChargingStationWorkerBroadcastChannel extends WorkerBroadcastChanne
         },
       ],
       [
+        BroadcastChannelProcedureName.PLUG_CONNECTOR,
+        async (requestPayload?: BroadcastChannelRequestPayload) => {
+          if (requestPayload?.connectorId == null) {
+            throw new BaseError(
+              `${this.chargingStation.logPrefix()} ${moduleName}.requestHandler: 'connectorId' field is required`
+            )
+          }
+          await this.chargingStation.plugConnector(requestPayload.connectorId)
+        },
+      ],
+      [
         BroadcastChannelProcedureName.SECURITY_EVENT_NOTIFICATION,
         this.passthrough(RequestCommand.SECURITY_EVENT_NOTIFICATION),
       ],
@@ -299,6 +310,17 @@ export class ChargingStationWorkerBroadcastChannel extends WorkerBroadcastChanne
             )
           }
           this.chargingStation.unlockConnector(requestPayload.connectorId)
+        },
+      ],
+      [
+        BroadcastChannelProcedureName.UNPLUG_CONNECTOR,
+        async (requestPayload?: BroadcastChannelRequestPayload) => {
+          if (requestPayload?.connectorId == null) {
+            throw new BaseError(
+              `${this.chargingStation.logPrefix()} ${moduleName}.requestHandler: 'connectorId' field is required`
+            )
+          }
+          await this.chargingStation.unplugConnector(requestPayload.connectorId)
         },
       ],
     ])

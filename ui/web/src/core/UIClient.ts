@@ -130,6 +130,13 @@ export class UIClient {
     })
   }
 
+  public async plugConnector (hashId: string, connectorId: number): Promise<ResponsePayload> {
+    return this.sendRequest(ProcedureName.PLUG_CONNECTOR, {
+      connectorId,
+      hashIds: [hashId],
+    })
+  }
+
   public registerWSEventListener<K extends keyof WebSocketEventMap>(
     event: K,
     listener: (event: WebSocketEventMap[K]) => void,
@@ -294,6 +301,13 @@ export class UIClient {
 
   public async unlockConnector (hashId: string, connectorId: number): Promise<ResponsePayload> {
     return this.sendRequest(ProcedureName.UNLOCK_CONNECTOR, {
+      connectorId,
+      hashIds: [hashId],
+    })
+  }
+
+  public async unplugConnector (hashId: string, connectorId: number): Promise<ResponsePayload> {
+    return this.sendRequest(ProcedureName.UNPLUG_CONNECTOR, {
       connectorId,
       hashIds: [hashId],
     })

@@ -11,6 +11,7 @@ import {
   checkChargingStationState,
   checkConfiguration,
   checkStationInfoConnectorStatus,
+  getBootChargePointStatus,
   getBootConnectorStatus,
   getChargingStationChargingProfilesLimit,
   getChargingStationId,
@@ -789,6 +790,80 @@ await describe('Helpers', async () => {
     assert.strictEqual(
       getBootConnectorStatus(chargingStation, 1, connectorStatus),
       ConnectorStatusEnum.Available
+    )
+  })
+
+  await it('should report Available for connector 0 when the station is operative', () => {
+    const { station: chargingStation } = createMockChargingStation({
+      baseName: TEST_CHARGING_STATION_BASE_NAME,
+      connectorsCount: 2,
+    })
+    assert.strictEqual(
+      getBootChargePointStatus(chargingStation, chargingStation.getConnectorStatus(0)),
+      ConnectorStatusEnum.Available
+    )
+  })
+
+  await it('should report Unavailable for connector 0 when the station is inoperative', () => {
+    const { station: chargingStation } = createMockChargingStation({
+      baseName: TEST_CHARGING_STATION_BASE_NAME,
+      connectorDefaults: { availability: AvailabilityType.Inoperative },
+      connectorsCount: 2,
+    })
+    const chargePointStatus = chargingStation.getConnectorStatus(0)
+    assert.ok(chargePointStatus != null)
+    chargePointStatus.availability = AvailabilityType.Inoperative
+    assert.strictEqual(
+      getBootChargePointStatus(chargingStation, chargePointStatus),
+      ConnectorStatusEnum.Unavailable
+    )
+  })
+
+  await it('should report Faulted for connector 0 when the charge point is faulted', () => {
+    const { station: chargingStation } = createMockChargingStation({
+      baseName: TEST_CHARGING_STATION_BASE_NAME,
+      connectorsCount: 2,
+    })
+    const chargePointStatus = chargingStation.getConnectorStatus(0)
+    assert.ok(chargePointStatus != null)
+    chargePointStatus.status = ConnectorStatusEnum.Faulted
+    assert.strictEqual(
+      getBootChargePointStatus(chargingStation, chargePointStatus),
+      ConnectorStatusEnum.Faulted
+    )
+  })
+
+  await it('should not report Reserved or Charging for connector 0', () => {
+    const { station: chargingStation } = createMockChargingStation({
+      baseName: TEST_CHARGING_STATION_BASE_NAME,
+      connectorsCount: 2,
+    })
+    const chargePointStatus = chargingStation.getConnectorStatus(0)
+    assert.ok(chargePointStatus != null)
+    chargePointStatus.status = ConnectorStatusEnum.Reserved
+    assert.strictEqual(
+      getBootChargePointStatus(chargingStation, chargePointStatus),
+      ConnectorStatusEnum.Available
+    )
+    chargePointStatus.status = ConnectorStatusEnum.Charging
+    assert.strictEqual(
+      getBootChargePointStatus(chargingStation, chargePointStatus),
+      ConnectorStatusEnum.Available
+    )
+  })
+
+  await it('should prefer Unavailable over Faulted when the station is inoperative', () => {
+    const { station: chargingStation } = createMockChargingStation({
+      baseName: TEST_CHARGING_STATION_BASE_NAME,
+      connectorsCount: 2,
+    })
+    const chargePointStatus = chargingStation.getConnectorStatus(0)
+    assert.ok(chargePointStatus != null)
+    chargePointStatus.availability = AvailabilityType.Inoperative
+    chargePointStatus.status = ConnectorStatusEnum.Faulted
+    assert.strictEqual(
+      getBootChargePointStatus(chargingStation, chargePointStatus),
+      ConnectorStatusEnum.Unavailable
     )
   })
 

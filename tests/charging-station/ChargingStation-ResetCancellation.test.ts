@@ -11,6 +11,7 @@ import { afterEach, describe, it } from 'node:test'
 import type { ChargingStation } from '../../src/charging-station/ChargingStation.js'
 import type { ChargingStationOptions } from '../../src/types/index.js'
 
+import { StopTransactionReason } from '../../src/types/index.js'
 import {
   flushMicrotasks,
   standardCleanup,
@@ -27,7 +28,7 @@ const RESET_TIME_MS = 60000
 interface ResetInternals {
   initialize: (options?: ChargingStationOptions) => void
   start: () => void
-  stop: () => Promise<void>
+  stop: (...args: unknown[]) => Promise<void>
 }
 
 const newStation = (resetTimeMs = RESET_TIME_MS): ChargingStation => {
@@ -148,5 +149,29 @@ await describe('ChargingStation cancellable reset', async () => {
       assert.strictEqual(initializeSpy.mock.calls.length, 2)
       assert.strictEqual(startSpy.mock.calls.length, 2)
     })
+  })
+
+  await it('should let the caller force stopping transactions regardless of stopTransactionsOnStopped', async t => {
+    const station = newStation(0)
+    if (station.stationInfo != null) {
+      station.stationInfo.stopTransactionsOnStopped = false
+    }
+    const internals = station as unknown as ResetInternals
+    const stopSpy = t.mock.method(internals, 'stop', () => Promise.resolve())
+    t.mock.method(internals, 'initialize', () => undefined)
+    t.mock.method(internals, 'start', () => undefined)
+
+    await station.reset(StopTransactionReason.SOFT_RESET)
+    await station.reset(StopTransactionReason.SOFT_RESET, true, true)
+    await station.reset(StopTransactionReason.HARD_RESET, false, true)
+
+    assert.deepStrictEqual(
+      stopSpy.mock.calls.map(call => call.arguments),
+      [
+        [StopTransactionReason.SOFT_RESET, false],
+        [StopTransactionReason.SOFT_RESET, true],
+        [StopTransactionReason.HARD_RESET, true],
+      ]
+    )
   })
 })

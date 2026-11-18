@@ -294,6 +294,14 @@ export const mcpToolSchemas = new Map<ProcedureName, MCPToolSchema>([
     },
   ],
   [
+    ProcedureName.PLUG_CONNECTOR,
+    {
+      description:
+        'OCPP 1.6 only: plug the cable in at the EV side of a connector (Available -> Preparing, resumes a suspended transaction, or starts a pending remote start)',
+      inputSchema: connectorInputSchema,
+    },
+  ],
+  [
     ProcedureName.SECURITY_EVENT_NOTIFICATION,
     {
       description: ocppDescription(
@@ -422,6 +430,14 @@ export const mcpToolSchemas = new Map<ProcedureName, MCPToolSchema>([
     ProcedureName.UNLOCK_CONNECTOR,
     {
       description: 'Release the cable retention lock on a connector',
+      inputSchema: connectorInputSchema,
+    },
+  ],
+  [
+    ProcedureName.UNPLUG_CONNECTOR,
+    {
+      description:
+        'OCPP 1.6 only: unplug the cable at the EV side of a connector (applies StopTransactionOnEVSideDisconnect and UnlockConnectorOnEVSideDisconnect to a running transaction)',
       inputSchema: connectorInputSchema,
     },
   ],

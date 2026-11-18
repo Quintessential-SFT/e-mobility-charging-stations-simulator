@@ -35,6 +35,8 @@ export enum ProcedureName {
   NOTIFY_REPORT = 'notifyReport',
   OPEN_CONNECTION = 'openConnection',
   PERFORMANCE_STATISTICS = 'performanceStatistics',
+  /** OCPP 1.6 only. Plugs the cable at the EV side. */
+  PLUG_CONNECTOR = 'plugConnector',
   SECURITY_EVENT_NOTIFICATION = 'securityEventNotification',
   SET_SUPERVISION_URL = 'setSupervisionUrl',
   SIGN_CERTIFICATE = 'signCertificate',
@@ -53,6 +55,8 @@ export enum ProcedureName {
   /** OCPP 2.0.x only. Use START_TRANSACTION / STOP_TRANSACTION for OCPP 1.6. */
   TRANSACTION_EVENT = 'transactionEvent',
   UNLOCK_CONNECTOR = 'unlockConnector',
+  /** OCPP 1.6 only. Unplugs the cable at the EV side. */
+  UNPLUG_CONNECTOR = 'unplugConnector',
 }
 
 export enum Protocol {

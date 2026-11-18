@@ -712,14 +712,14 @@ All kind of OCPP parameters are supported in charging station configuration or c
 - :white_check_mark: NumberOfConnectors (type: integer) (units: -)
 - :x: ResetRetries (type: integer) (units: times)
 - :white_check_mark: ConnectorPhaseRotation (type: CSL) (units: -)
-- :x: StopTransactionOnEVSideDisconnect (type: boolean) (units: -)
+- :white_check_mark: StopTransactionOnEVSideDisconnect (type: boolean) (units: -)
 - :x: StopTransactionOnInvalidId (type: boolean) (units: -)
 - :x: StopTxnAlignedData (type: CSL) (units: -)
 - :x: StopTxnSampledData (type: CSL) (units: -)
 - :white_check_mark: SupportedFeatureProfiles (type: CSL) (units: -)
 - :x: TransactionMessageAttempts (type: integer) (units: times)
 - :x: TransactionMessageRetryInterval (type: integer) (units: seconds)
-- :x: UnlockConnectorOnEVSideDisconnect (type: boolean) (units: -)
+- :white_check_mark: UnlockConnectorOnEVSideDisconnect (type: boolean) (units: -)
 - :white_check_mark: WebSocketPingInterval (type: integer) (units: seconds)
 
 #### Firmware Management Profile
@@ -1319,6 +1319,62 @@ Set the WebSocket header _Sec-WebSocket-Protocol_ to `ui0.0.1`.
   `hashIdsFailed`: charging station unique identifier strings array (optional),  
   `responsesFailed`: failed responses payload array (optional)  
   }
+
+###### Plug Connector
+
+OCPP 1.6 only. Plugs the cable in at the EV side of a connector. See [EV side cable (OCPP 1.6)](#ev-side-cable-ocpp-16).
+
+- Request:  
+  `ProcedureName`: 'plugConnector'  
+  `PDU`: {  
+  `hashIds`: charging station unique identifier strings array (optional, default: all charging stations),  
+  `connectorId`: physical connector id integer (>= 1)  
+  }
+
+- Response:  
+  `PDU`: {  
+  `status`: 'success' | 'failure',  
+  `hashIdsSucceeded`: charging station unique identifier strings array,  
+  `hashIdsFailed`: charging station unique identifier strings array (optional),  
+  `responsesFailed`: failed responses payload array (optional)  
+  }
+
+###### Unplug Connector
+
+OCPP 1.6 only. Unplugs the cable at the EV side of a connector. See [EV side cable (OCPP 1.6)](#ev-side-cable-ocpp-16).
+
+- Request:  
+  `ProcedureName`: 'unplugConnector'  
+  `PDU`: {  
+  `hashIds`: charging station unique identifier strings array (optional, default: all charging stations),  
+  `connectorId`: physical connector id integer (>= 1)  
+  }
+
+- Response:  
+  `PDU`: {  
+  `status`: 'success' | 'failure',  
+  `hashIdsSucceeded`: charging station unique identifier strings array,  
+  `hashIdsFailed`: charging station unique identifier strings array (optional),  
+  `responsesFailed`: failed responses payload array (optional)  
+  }
+
+###### EV side cable (OCPP 1.6)
+
+Each OCPP 1.6 connector simulates whether the cable is plugged in at the EV side (`cablePlugged` in the connector status):
+
+- Connectors start unplugged. A connector with an open transaction restored from the persisted state (keep it across a restart with `stopTransactionsOnStopped` false) keeps its cable state and resumes its periodic meter values after the BootNotification is accepted:
+  - plugged at shutdown: comes back plugged and reports `Charging`;
+  - unplugged at shutdown: comes back unplugged and reports `SuspendedEV` with `errorCode` `NoError` and `info` 'EV side disconnected', meter values frozen, connector locked.
+- A Reset.req (Soft or Hard) stops every ongoing transaction (StopTransaction reason `SoftReset` / `HardReset`) before the reset, regardless of `stopTransactionsOnStopped`, so no transaction is restored after a reset (OCPP 1.6 §5.14).
+- Plug on an `Available` connector reports `Preparing`; unplug on a `Preparing` connector without a transaction reports `Available`.
+- An accepted RemoteStartTransaction on an unplugged connector reports `Preparing` and sends StartTransaction when the cable is plugged. When `ConnectionTimeOut` (> 0) elapses first, the remote start is cancelled and the connector reports `Available`.
+- A StartTransaction from the UI or the automatic transaction generator marks the cable plugged.
+- Unplug during a transaction (OCPP 1.6 §4.9, §4.10):
+  - `StopTransactionOnEVSideDisconnect` true (default): `Finishing` with `errorCode` `NoError` and `info` 'EV side disconnected', then StopTransaction with reason `EVDisconnected`. Plugging the cable back does not resume the stopped transaction.
+    - `UnlockConnectorOnEVSideDisconnect` true (default): the connector unlocks and reports `Available` after the stop.
+    - `UnlockConnectorOnEVSideDisconnect` false: the cable stays locked at the charging station, so the connector stays `Finishing` after the stop instead of reporting `Available` (OCPP 1.6 §4.9, §7.7). Plugging the cable back in reports `Preparing` (§4.9 F2); charging needs a new authorization and a new StartTransaction. A RemoteStartTransaction is accepted in this state and starts a new transaction through `Preparing`. An UnlockConnector.req unlocks the connector and reports `Available` (§4.9 F1).
+  - `StopTransactionOnEVSideDisconnect` false: the transaction is not stopped. `SuspendedEV` with `errorCode` `NoError` and `info` 'EV side disconnected'; meter values report no power and the energy registers and SoC do not advance (also with `coherentMeterValues`); the connector stays locked. Plug reports `Charging` and energy transfer resumes.
+  - Changing `StopTransactionOnEVSideDisconnect` to true while a transaction is unplugged stops it with reason `EVDisconnected`.
 
 ###### OCPP commands trigger
 

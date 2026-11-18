@@ -142,14 +142,23 @@ export const getCoherentSampleSnapshot = (
   session: CoherentSession
 ): CoherentSample => {
   const lastSample = sessionRuntimes.get(session)?.lastSample
+  const registerWh = Math.max(
+    0,
+    connectorStatus.transactionEnergyActiveImportRegisterValue ?? 0
+  )
+  // OCPP 1.6 §4.10: no energy transfer while the cable is unplugged at the EV.
+  if (connectorStatus.cablePlugged === false) {
+    return buildZeroSample(
+      lastSample?.socPercent ?? session.socPercent,
+      lastSample?.voltageV ?? context.getVoltageOut(),
+      registerWh
+    )
+  }
   if (lastSample != null) {
     return {
       ...lastSample,
       deltaEnergyWh: 0,
-      energyRegisterWh: Math.max(
-        0,
-        connectorStatus.transactionEnergyActiveImportRegisterValue ?? 0
-      ),
+      energyRegisterWh: registerWh,
     }
   }
   return buildZeroSample(
@@ -434,6 +443,22 @@ export const computeCoherentSample = (
       safeV,
       Math.max(0, connectorStatus.transactionEnergyActiveImportRegisterValue ?? 0)
     )
+  }
+
+  // OCPP 1.6 §4.10: an unplugged, still-open transaction is idle. Power and
+  // current stay 0, the energy register and SoC do not advance, and
+  // lastComputedAtMs is updated so the unplugged interval is not integrated
+  // after the cable is plugged back in.
+  if (connectorStatus.cablePlugged === false) {
+    const sample = buildZeroSample(
+      session.socPercent,
+      nominalV,
+      Math.max(0, connectorStatus.transactionEnergyActiveImportRegisterValue ?? 0)
+    )
+    const runtime = getSessionRuntime(session)
+    runtime.lastSample = sample
+    runtime.lastComputedAtMs = options.nowMs
+    return sample
   }
 
   const elapsedMs = Math.max(0, options.nowMs - session.sessionStartMs)

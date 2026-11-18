@@ -13,6 +13,7 @@ import {
   ErrorType,
   GenericStatus,
   OCPP16IncomingRequestCommand,
+  OCPP16StopTransactionReason,
   ResetType,
 } from '../../../../src/types/index.js'
 import {
@@ -157,6 +158,38 @@ await describe('OCPP16IncomingRequestService — Reset', async () => {
     assert.strictEqual(reset.mock.callCount(), 1)
     assert.deepStrictEqual(callOrder, ['response', 'reset'])
   })
+
+  for (const [type, reason, graceful] of [
+    [ResetType.SOFT, OCPP16StopTransactionReason.SOFT_RESET, true],
+    [ResetType.HARD, OCPP16StopTransactionReason.HARD_RESET, false],
+  ] as const) {
+    await it(`should stop ongoing transactions before a ${type} reset`, async () => {
+      const { incomingRequestService, station } = testContext
+      station.started = true
+      station.inAcceptedState = () => true
+      station.recordRequestStatistic = () => undefined
+      if (station.stationInfo != null) {
+        station.stationInfo.stopTransactionsOnStopped = false
+      }
+      const reset = mock.fn((..._args: unknown[]): Promise<void> => Promise.resolve())
+      Object.assign(station, { reset })
+      const sendResponse = mock.fn((...args: unknown[]): Promise<void> => {
+        ;(args[4] as undefined | { onMessageSent?: () => void })?.onMessageSent?.()
+        return Promise.resolve()
+      })
+      Object.assign(station.ocppRequestService, { sendResponse })
+
+      await incomingRequestService.incomingRequestHandler(
+        station,
+        `reset-stops-transactions-${type}`,
+        OCPP16IncomingRequestCommand.RESET,
+        { type }
+      )
+
+      assert.strictEqual(reset.mock.callCount(), 1)
+      assert.deepStrictEqual(reset.mock.calls[0].arguments, [reason, graceful, true])
+    })
+  }
 
   await it('should discard a Reset action when its response settles in a newer lifecycle', async () => {
     const { incomingRequestService, station } = testContext

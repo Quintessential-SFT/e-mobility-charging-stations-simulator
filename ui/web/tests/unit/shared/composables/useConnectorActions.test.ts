@@ -139,6 +139,22 @@ describe('useConnectorActions', () => {
     })
   })
 
+  describe('plugConnector and unplugConnector', () => {
+    it('should call uiClient.plugConnector with hashId and connectorId', async () => {
+      const [{ plugConnector }] = withSetup(() => useConnectorActions({ connectorId, hashId }))
+      plugConnector()
+      await flushPromises()
+      expect(mockClient.plugConnector).toHaveBeenCalledWith(hashId, connectorId)
+    })
+
+    it('should call uiClient.unplugConnector with hashId and connectorId', async () => {
+      const [{ unplugConnector }] = withSetup(() => useConnectorActions({ connectorId, hashId }))
+      unplugConnector()
+      await flushPromises()
+      expect(mockClient.unplugConnector).toHaveBeenCalledWith(hashId, connectorId)
+    })
+  })
+
   describe('unlockConnector', () => {
     it('should call uiClient.unlockConnector with hashId and connectorId', async () => {
       const [{ unlockConnector }] = withSetup(() => useConnectorActions({ connectorId, hashId }))

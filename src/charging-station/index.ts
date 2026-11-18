@@ -23,6 +23,7 @@ export {
   checkChargingStationState,
   checkConfiguration,
   checkStationInfoConnectorStatus,
+  getBootChargePointStatus,
   getBootConnectorStatus,
   getChargingStationId,
   getConnectorChargingProfiles,

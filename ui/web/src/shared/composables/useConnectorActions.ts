@@ -1,6 +1,6 @@
 /**
  * @file useConnectorActions.ts
- * @description Headless composable for connector-level actions (stop transaction, lock/unlock, ATG toggle, set connector status).
+ * @description Headless composable for connector-level actions (stop transaction, lock/unlock, plug/unplug, ATG toggle, set connector status).
  */
 import type { OCPPVersion } from 'ui-common'
 
@@ -25,7 +25,14 @@ interface ConnectorActionsDeps {
  */
 export function useConnectorActions (deps: ConnectorActionsDeps): {
   lockConnector: () => void
-  pending: Readonly<{ atg: boolean; lock: boolean; setStatus: boolean; stopTx: boolean }>
+  pending: Readonly<{
+    atg: boolean
+    cable: boolean
+    lock: boolean
+    setStatus: boolean
+    stopTx: boolean
+  }>
+  plugConnector: () => void
   setConnectorStatus: (
     status: ChargePointStatus,
     onSuccess?: () => void,
@@ -38,11 +45,13 @@ export function useConnectorActions (deps: ConnectorActionsDeps): {
     ocppVersion?: OCPPVersion
   ) => void
   unlockConnector: () => void
+  unplugConnector: () => void
 } {
   const $uiClient = useUIClient()
   const $toast = useToast()
   const { pending, run } = useAsyncAction({
     atg: false,
+    cable: false,
     lock: false,
     setStatus: false,
     stopTx: false,
@@ -89,6 +98,23 @@ export function useConnectorActions (deps: ConnectorActionsDeps): {
     })
   }
 
+  const plugConnector = (): void => {
+    // 'cable' key is shared by plugConnector and unplugConnector
+    run('cable', {
+      action: () => $uiClient.plugConnector(hashId.value, connectorId.value),
+      errorMsg: 'Error plugging connector cable',
+      successMsg: 'Connector cable plugged',
+    })
+  }
+
+  const unplugConnector = (): void => {
+    run('cable', {
+      action: () => $uiClient.unplugConnector(hashId.value, connectorId.value),
+      errorMsg: 'Error unplugging connector cable',
+      successMsg: 'Connector cable unplugged',
+    })
+  }
+
   const startATG = (): void => {
     run('atg', {
       action: () => $uiClient.startAutomaticTransactionGenerator(hashId.value, connectorId.value),
@@ -129,10 +155,12 @@ export function useConnectorActions (deps: ConnectorActionsDeps): {
   return {
     lockConnector,
     pending: readonly(pending),
+    plugConnector,
     setConnectorStatus,
     startATG,
     stopATG,
     stopTransaction,
     unlockConnector,
+    unplugConnector,
   }
 }

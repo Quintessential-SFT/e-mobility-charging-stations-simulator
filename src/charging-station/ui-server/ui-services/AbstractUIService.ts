@@ -115,6 +115,7 @@ export abstract class AbstractUIService {
     ],
     [ProcedureName.NOTIFY_REPORT, BroadcastChannelProcedureName.NOTIFY_REPORT],
     [ProcedureName.OPEN_CONNECTION, BroadcastChannelProcedureName.OPEN_CONNECTION],
+    [ProcedureName.PLUG_CONNECTOR, BroadcastChannelProcedureName.PLUG_CONNECTOR],
     [
       ProcedureName.SECURITY_EVENT_NOTIFICATION,
       BroadcastChannelProcedureName.SECURITY_EVENT_NOTIFICATION,
@@ -136,6 +137,7 @@ export abstract class AbstractUIService {
     [ProcedureName.STOP_TRANSACTION, BroadcastChannelProcedureName.STOP_TRANSACTION],
     [ProcedureName.TRANSACTION_EVENT, BroadcastChannelProcedureName.TRANSACTION_EVENT],
     [ProcedureName.UNLOCK_CONNECTOR, BroadcastChannelProcedureName.UNLOCK_CONNECTOR],
+    [ProcedureName.UNPLUG_CONNECTOR, BroadcastChannelProcedureName.UNPLUG_CONNECTOR],
   ])
 
   protected readonly requestHandlers: Map<ProcedureName, ProtocolRequestHandler>

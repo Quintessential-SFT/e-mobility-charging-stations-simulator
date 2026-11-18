@@ -49,6 +49,14 @@
         :on="() => lockConnector()"
         on-label="Lock"
       />
+      <StateButton
+        v-if="ocppVersion === OCPPVersion.VERSION_16"
+        :active="connector.cablePlugged !== false"
+        :off="() => unplugConnector()"
+        off-label="Unplug"
+        :on="() => plugConnector()"
+        on-label="Plug"
+      />
       <ToggleButton
         v-if="connector.transactionStarted !== true"
         :id="`${hashId}-${evseId ?? 0}-${connectorId}-start-transaction`"
@@ -77,7 +85,7 @@
 </template>
 
 <script setup lang="ts">
-import type { ChargePointStatus, ConnectorStatus, OCPPVersion, Status } from 'ui-common'
+import type { ChargePointStatus, ConnectorStatus, Status } from 'ui-common'
 
 import {
   getEnumStringValue,
@@ -85,6 +93,7 @@ import {
   OCPP16ChargePointErrorCode,
   OCPP16ChargePointStatus,
   OCPP20ConnectorStatusEnumType,
+  OCPPVersion,
 } from 'ui-common'
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
@@ -133,11 +142,13 @@ const showStartTransaction = (): void => {
 
 const {
   lockConnector,
+  plugConnector,
   setConnectorStatus,
   startATG: startAutomaticTransactionGenerator,
   stopATG: stopAutomaticTransactionGenerator,
   stopTransaction: doStopTransaction,
   unlockConnector,
+  unplugConnector,
 } = useConnectorActions({
   connectorId: computed(() => props.connectorId),
   evseId: computed(() => props.evseId),

@@ -79,6 +79,32 @@ export const getBootConnectorStatus = (
 }
 
 /**
+ * Boot-time status for connectorId 0 (the Charge Point as a whole).
+ * OCPP 1.6 §4.9 / §7.7 allow only Available, Unavailable, and Faulted
+ * on connector 0. Unavailable is used when the station itself is
+ * inoperative so a ChangeAvailability Inoperative state survives a
+ * reboot. Faulted is used when the persisted charge-point status or
+ * bootStatus is Faulted. Any other persisted status is reported as
+ * Available.
+ * @param chargingStation - Owning charging station.
+ * @param connectorStatus - Persisted connector 0 status, if present.
+ * @returns Boot-time {@link ConnectorStatusEnum} allowed on connector 0.
+ */
+export const getBootChargePointStatus = (
+  chargingStation: ChargingStation,
+  connectorStatus?: ConnectorStatus
+): ConnectorStatusEnum => {
+  if (!chargingStation.isChargingStationAvailable()) {
+    return ConnectorStatusEnum.Unavailable
+  }
+  const persisted = connectorStatus?.status ?? connectorStatus?.bootStatus
+  if (persisted === ConnectorStatusEnum.Faulted) {
+    return ConnectorStatusEnum.Faulted
+  }
+  return ConnectorStatusEnum.Available
+}
+
+/**
  * Warn-and-strip pass on template-supplied connector status: a `status`
  * field on a template connector is ambiguous (should the station boot
  * into that status or observe it live?), so the field is logged and

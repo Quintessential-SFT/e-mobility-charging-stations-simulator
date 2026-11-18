@@ -141,6 +141,7 @@ import {
   checkStationInfoConnectorStatus,
   createSerialNumber,
   getAmperageLimitationUnitDivider,
+  getBootChargePointStatus,
   getBootConnectorStatus,
   getChargingStationChargingProfilesLimit,
   getChargingStationId,
@@ -168,6 +169,7 @@ import {
   buildBootNotificationRequest,
   createOCPPServices,
   flushQueuedTransactionMessages,
+  OCPP16ServiceUtils,
   OCPP20ServiceUtils,
   OCPPAuthServiceFactory,
   OCPPConstants,
@@ -1458,6 +1460,15 @@ export class ChargingStation extends EventEmitter {
   }
 
   /**
+   * Plugs the cable in at the EV side of a connector (OCPP 1.6 only).
+   * @param connectorId - Physical connector id
+   */
+  public async plugConnector (connectorId: number): Promise<void> {
+    if (!this.checkEVSideCableConnector(connectorId, 'plugConnector')) return
+    await OCPP16ServiceUtils.plugConnector(this, connectorId)
+  }
+
+  /**
    * Records a request statistic for the given command, but only when statistics
    * collection is enabled on the station (`stationInfo.enableStatistics`).
    * @param command - OCPP command the statistic is recorded against.
@@ -1608,10 +1619,18 @@ export class ChargingStation extends EventEmitter {
    * Resets the charging station with optional graceful shutdown.
    * @param reason - Optional reason for the reset
    * @param graceful - Whether to perform a graceful shutdown
+   * @param stopTransactions - Whether to stop running transactions, overriding the graceful default
    */
-  public async reset (reason?: StopTransactionReason, graceful = true): Promise<void> {
+  public async reset (
+    reason?: StopTransactionReason,
+    graceful = true,
+    stopTransactions?: boolean
+  ): Promise<void> {
     try {
-      await this.stop(reason, graceful ? this.stationInfo?.stopTransactionsOnStopped : false)
+      await this.stop(
+        reason,
+        stopTransactions ?? (graceful ? this.stationInfo?.stopTransactionsOnStopped : false)
+      )
     } catch (error) {
       const e = ensureError(error)
       logger.error(`${this.logPrefix()} ${moduleName}.reset: Error during reset stop phase:`, e)
@@ -2262,8 +2281,38 @@ export class ChargingStation extends EventEmitter {
     }
   }
 
+  /**
+   * Unplugs the cable at the EV side of a connector (OCPP 1.6 only).
+   * @param connectorId - Physical connector id
+   */
+  public async unplugConnector (connectorId: number): Promise<void> {
+    if (!this.checkEVSideCableConnector(connectorId, 'unplugConnector')) return
+    await OCPP16ServiceUtils.unplugConnector(this, connectorId)
+  }
+
   private add (): void {
     this.emitChargingStationEvent(ChargingStationEvents.added)
+  }
+
+  private checkEVSideCableConnector (connectorId: number, methodName: string): boolean {
+    if (this.stationInfo?.ocppVersion !== OCPPVersion.VERSION_16) {
+      throw new BaseError(
+        `${this.logPrefix()} ${moduleName}.${methodName}: EV side cable simulation is only supported with OCPP 1.6`
+      )
+    }
+    if (connectorId === 0) {
+      logger.warn(
+        `${this.logPrefix()} ${moduleName}.${methodName}: connector id 0 is not a physical connector`
+      )
+      return false
+    }
+    if (!this.hasConnector(connectorId) || this.getConnectorStatus(connectorId) == null) {
+      logger.warn(
+        `${this.logPrefix()} ${moduleName}.${methodName}: connector id ${connectorId.toString()} does not exist`
+      )
+      return false
+    }
+    return true
   }
 
   private clearIntervalFlushMessageBuffer (): void {
@@ -2951,6 +3000,9 @@ export class ChargingStation extends EventEmitter {
     warnOnOCPP16TemplateKeys(this)
     this.initializeOcppConfiguration()
     this.initializeOcppServices()
+    if (this.stationInfo.ocppVersion === OCPPVersion.VERSION_16) {
+      OCPP16ServiceUtils.initializeEVSideCableState(this)
+    }
     const transactionEventRequestValidator = isOCPP20x(this.stationInfo.ocppVersion)
       ? (request: OCPP20TransactionEventRequest): boolean => {
           try {
@@ -3430,6 +3482,16 @@ export class ChargingStation extends EventEmitter {
         StandardParametersKey.ConnectionTimeOut,
         Constants.DEFAULT_EV_CONNECTION_TIMEOUT_SECONDS.toString()
       )
+    }
+    if (this.stationInfo?.ocppVersion === OCPPVersion.VERSION_16) {
+      for (const key of [
+        StandardParametersKey.StopTransactionOnEVSideDisconnect,
+        StandardParametersKey.UnlockConnectorOnEVSideDisconnect,
+      ]) {
+        if (getConfigurationKey(this, key) == null) {
+          addConfigurationKey(this, key, 'true', { readonly: false })
+        }
+      }
     }
     this.saveOcppConfiguration()
   }
@@ -4661,13 +4723,36 @@ export class ChargingStation extends EventEmitter {
     if (this.heartbeatSetInterval == null) {
       this.startHeartbeat()
     }
+    // OCPP 1.6 errata 3.22: after BootNotification.conf Accepted, send
+    // StatusNotification for connectorId 0 (the Charge Point as a whole)
+    // and then for every connector. Connector 0 is reported first so a
+    // CSMS that also aggregates connector statuses is not overwritten.
+    // The notification is sent without changing connector 0's local status,
+    // which may be Reserved for a station-wide reservation.
+    if (this.stationInfo?.ocppVersion === OCPPVersion.VERSION_16) {
+      const chargePointStatus = this.getConnectorStatus(0)
+      if (chargePointStatus != null) {
+        await this.ocppRequestService.requestHandler(
+          this,
+          RequestCommand.STATUS_NOTIFICATION,
+          {
+            connectorId: 0,
+            status: getBootChargePointStatus(this, chargePointStatus),
+          },
+          { responseTimeoutMs }
+        )
+      }
+    }
     for (const { connectorId, connectorStatus, evseId } of this.iterateConnectors(true)) {
+      const bootStatus = getBootConnectorStatus(this, connectorId, connectorStatus)
       await sendAndSetConnectorStatus(
         this,
         {
           connectorId,
           ...(evseId != null && { evseId }),
-          status: getBootConnectorStatus(this, connectorId, connectorStatus),
+          status: bootStatus,
+          ...(this.stationInfo?.ocppVersion === OCPPVersion.VERSION_16 &&
+            OCPP16ServiceUtils.getEVSideDisconnectedStatusFields(connectorStatus, bootStatus)),
         },
         { responseTimeoutMs, send: true }
       )
