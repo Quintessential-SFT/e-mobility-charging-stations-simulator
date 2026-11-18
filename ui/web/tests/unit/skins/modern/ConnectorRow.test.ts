@@ -187,6 +187,26 @@ describe('ConnectorRow', () => {
       expect(mockClient.plugConnector).toHaveBeenCalled()
     })
 
+    it('should show a locked unplugged Finishing connector and let it be plugged back in', async () => {
+      wrapper = mountRow({
+        connector: {
+          cablePlugged: false,
+          locked: true,
+          status: OCPP16ChargePointStatus.FINISHING,
+          transactionStarted: false,
+        },
+        ocppVersion: OCPPVersion.VERSION_16,
+      })
+      expect(wrapper.findAll('.modern-pill')[0].text()).toContain('Finishing')
+      expect(wrapper.text()).toContain('locked')
+      expect(wrapper.text()).toContain('unplugged')
+      const chip = wrapper.findAll('.modern-btn--chip')[0]
+      expect(chip.text()).toContain('Plug')
+      await chip.trigger('click')
+      await flushPromises()
+      expect(mockClient.plugConnector).toHaveBeenCalled()
+    })
+
     it('should call unplugConnector for a plugged connector', async () => {
       wrapper = mountRow({ connector: { cablePlugged: true }, ocppVersion: OCPPVersion.VERSION_16 })
       const chip = wrapper.findAll('.modern-btn--chip')[0]

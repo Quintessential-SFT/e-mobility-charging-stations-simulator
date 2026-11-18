@@ -195,6 +195,25 @@ describe('CSConnector', () => {
       expect(mockClient.plugConnector).toHaveBeenCalled()
     })
 
+    it('should let a locked unplugged Finishing connector be plugged back in', async () => {
+      const wrapper = mountConnector({
+        connectorOverrides: {
+          cablePlugged: false,
+          locked: true,
+          status: OCPP16ChargePointStatus.FINISHING,
+          transactionStarted: false,
+        },
+        ocppVersion: OCPPVersion.VERSION_16,
+      })
+      const stateButtons = wrapper.findAllComponents(StateButtonStub)
+      expect((stateButtons[0].props() as unknown as { active: boolean }).active).toBe(true)
+      const cableProps = stateButtons[1].props() as unknown as StubProps & { active: boolean }
+      expect(cableProps.active).toBe(false)
+      cableProps.on?.()
+      await flushPromises()
+      expect(mockClient.plugConnector).toHaveBeenCalled()
+    })
+
     it('should call unplugConnector for a plugged OCPP 1.6 connector', async () => {
       const wrapper = mountConnector({
         connectorOverrides: { cablePlugged: true },
