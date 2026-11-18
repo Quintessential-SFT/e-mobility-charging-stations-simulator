@@ -1373,9 +1373,8 @@ Each OCPP 1.6 connector simulates whether the cable is plugged in at the EV side
   - `StopTransactionOnEVSideDisconnect` true (default): `Finishing` with `errorCode` `NoError` and `info` 'EV side disconnected', then StopTransaction with reason `EVDisconnected`. Plugging the cable back does not resume the stopped transaction.
     - `UnlockConnectorOnEVSideDisconnect` true (default): the connector unlocks and reports `Available` after the stop.
     - `UnlockConnectorOnEVSideDisconnect` false: the cable stays locked at the charging station, so the connector stays `Finishing` after the stop instead of reporting `Available` (OCPP 1.6 §4.9, §7.7). Plugging the cable back in reports `Preparing` (§4.9 F2); charging needs a new authorization and a new StartTransaction. A RemoteStartTransaction is accepted in this state and starts a new transaction through `Preparing`. An UnlockConnector.req unlocks the connector and reports `Available` (§4.9 F1).
-  - `StopTransactionOnEVSideDisconnect` false: the transaction is not stopped. `SuspendedEV` with `errorCode` `NoError` and `info` 'EV side disconnected'; meter values report no power and the energy registers do not advance; the connector stays locked. Plug reports `Charging` and energy transfer resumes.
+  - `StopTransactionOnEVSideDisconnect` false: the transaction is not stopped. `SuspendedEV` with `errorCode` `NoError` and `info` 'EV side disconnected'; meter values report no power and the energy registers and SoC do not advance (also with `coherentMeterValues`); the connector stays locked. Plug reports `Charging` and energy transfer resumes.
   - Changing `StopTransactionOnEVSideDisconnect` to true while a transaction is unplugged stops it with reason `EVDisconnected`.
-- Coherent meter values (`coherentMeterValues`) are not frozen while unplugged.
 
 ###### OCPP commands trigger
 
