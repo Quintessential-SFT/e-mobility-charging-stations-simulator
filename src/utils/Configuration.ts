@@ -31,7 +31,11 @@ import {
   configurationLogPrefix,
   getDefaultPerformanceStorageUri,
 } from './ConfigurationUtils.js'
-import { ConfigurationValidationError, validateConfiguration } from './ConfigurationValidation.js'
+import {
+  applyUIServerAccessPolicyEnvironmentOverrides,
+  ConfigurationValidationError,
+  validateConfiguration,
+} from './ConfigurationValidation.js'
 import { Constants } from './Constants.js'
 import { ensureError, handleFileException } from './ErrorUtils.js'
 import { logger } from './Logger.js'
@@ -280,6 +284,18 @@ export class Configuration {
         uiServerConfiguration,
         Configuration.getConfigurationData()?.uiServer ?? defaultUIServerConfiguration
       )
+    }
+    try {
+      uiServerConfiguration.accessPolicy = applyUIServerAccessPolicyEnvironmentOverrides(
+        uiServerConfiguration.accessPolicy,
+        env
+      )
+    } catch (error) {
+      if (error instanceof BaseError) {
+        console.error(`${chalk.green(configurationLogPrefix())} ${chalk.red(error.message)}`)
+        process.exit(1)
+      }
+      throw error
     }
     if (isCFEnvironment()) {
       delete uiServerConfiguration.options?.host

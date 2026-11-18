@@ -1,5 +1,7 @@
 import type { IncomingMessage } from 'node:http'
 
+import { BlockList } from 'node:net'
+
 import type { UIServerConfiguration } from '../../types/index.js'
 
 import {
@@ -10,6 +12,7 @@ import {
   isNotEmptyString,
   normalizeHost,
   normalizeIPAddress,
+  parseCIDR,
   UI_SERVER_ACCESS_POLICY_DEFAULTS,
 } from '../../utils/index.js'
 import { splitHeaderList, splitQuoted } from './UIServerNet.js'
@@ -78,6 +81,16 @@ const DENIAL_MESSAGES: Readonly<Record<UIServerAccessDenialReason, string>> = {
 }
 
 /**
+ * Normalized `accessPolicy.trustedProxies` index: exact IP literals keyed as
+ * `family:value`, and CIDR ranges held in a `node:net` {@link BlockList}
+ * (`undefined` when no range is configured).
+ */
+export interface TrustedProxyIndex {
+  readonly addresses: ReadonlySet<string>
+  readonly ranges: BlockList | undefined
+}
+
+/**
  * Per-{@link AbstractUIServer} cache holding the decisions of in-flight
  * requests and the normalized trusted-proxy index of the active
  * configuration. Both maps are weakly keyed so entries are released with
@@ -85,11 +98,11 @@ const DENIAL_MESSAGES: Readonly<Record<UIServerAccessDenialReason, string>> = {
  *
  * Cache invalidation is identity-based: mutating
  * `accessPolicy.trustedProxies` in place will not refresh the normalized
- * set. Reload flows must construct a new {@link UIServerConfiguration}.
+ * index. Reload flows must construct a new {@link UIServerConfiguration}.
  */
 export interface UIServerAccessCache {
   readonly decisions: WeakMap<IncomingMessage, UIServerAccessDecision>
-  readonly trustedProxies: WeakMap<UIServerConfiguration, ReadonlySet<string>>
+  readonly trustedProxies: WeakMap<UIServerConfiguration, TrustedProxyIndex>
 }
 
 /**
@@ -107,7 +120,7 @@ export type UIServerAccessDecision =
 
 export const createUIServerAccessCache = (): UIServerAccessCache => ({
   decisions: new WeakMap<IncomingMessage, UIServerAccessDecision>(),
-  trustedProxies: new WeakMap<UIServerConfiguration, ReadonlySet<string>>(),
+  trustedProxies: new WeakMap<UIServerConfiguration, TrustedProxyIndex>(),
 })
 
 type ParseOutcome<T> =
@@ -490,32 +503,52 @@ const isSecureForwardedProtocol = (protocol: string | undefined): boolean => {
 const getTrustedProxies = (
   uiServerConfiguration: UIServerConfiguration,
   cache: UIServerAccessCache
-): ReadonlySet<string> => {
+): TrustedProxyIndex => {
   const cached = cache.trustedProxies.get(uiServerConfiguration)
   if (cached != null) {
     return cached
   }
   const trustedProxies = uiServerConfiguration.accessPolicy?.trustedProxies ?? []
-  const normalized = new Set<string>()
+  const addresses = new Set<string>()
+  let ranges: BlockList | undefined
   for (const proxy of trustedProxies) {
+    const cidrRange = parseCIDR(proxy)
+    if (cidrRange != null) {
+      ranges ??= new BlockList()
+      ranges.addSubnet(cidrRange.address, cidrRange.prefix, cidrRange.family)
+      continue
+    }
     const normalizedProxy = normalizeIPAddress(proxy)
     if (normalizedProxy != null) {
-      normalized.add(`${normalizedProxy.family}:${normalizedProxy.value}`)
+      addresses.add(`${normalizedProxy.family}:${normalizedProxy.value}`)
     }
   }
-  cache.trustedProxies.set(uiServerConfiguration, normalized)
-  return normalized
+  const index: TrustedProxyIndex = { addresses, ranges }
+  cache.trustedProxies.set(uiServerConfiguration, index)
+  return index
 }
 
-const isTrustedProxy = (remoteAddress: string, trustedProxies: ReadonlySet<string>): boolean => {
-  if (isEmpty(trustedProxies)) {
+const isTrustedProxy = (remoteAddress: string, trustedProxies: TrustedProxyIndex): boolean => {
+  if (isEmpty(trustedProxies.addresses) && trustedProxies.ranges == null) {
     return false
   }
   const normalizedRemoteAddress = normalizeIPAddress(remoteAddress)
   if (normalizedRemoteAddress == null) {
     return false
   }
-  return trustedProxies.has(`${normalizedRemoteAddress.family}:${normalizedRemoteAddress.value}`)
+  if (
+    trustedProxies.addresses.has(
+      `${normalizedRemoteAddress.family}:${normalizedRemoteAddress.value}`
+    )
+  ) {
+    return true
+  }
+  // IPv4-mapped IPv6 remotes are normalized to their IPv4 form above, so they
+  // match IPv4 ranges.
+  return (
+    trustedProxies.ranges?.check(normalizedRemoteAddress.value, normalizedRemoteAddress.family) ??
+    false
+  )
 }
 
 /**

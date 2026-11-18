@@ -15,6 +15,7 @@
 // load, so the bootstrap must set EVSE_ASSETS_DIR before any of them loads.
 import '../stubs/testEnvBootstrap.mjs'
 import assert from 'node:assert/strict'
+import { env } from 'node:process'
 import { afterEach, describe, it } from 'node:test'
 
 import type {
@@ -132,6 +133,54 @@ await describe('Configuration', async () => {
     assert.strictEqual(accessPolicy.requireTlsForNonLoopback, true)
     assert.strictEqual(accessPolicy.allowLoopbackProxy, false)
     assert.deepStrictEqual(accessPolicy.trustedProxies, [])
+  })
+
+  await it('should let UI_SERVER_* environment variables replace access policy lists', () => {
+    const internals = getConfigurationInternals()
+    const originalData = internals.configurationData
+    const variables = [
+      'UI_SERVER_ALLOWED_HOSTS',
+      'UI_SERVER_ALLOWED_ORIGINS',
+      'UI_SERVER_TRUSTED_PROXIES',
+    ] as const
+    const originalEnvironment = variables.map(name => env[name])
+    internals.configurationData = {
+      $schemaVersion: CURRENT_CONFIGURATION_SCHEMA_VERSION,
+      stationTemplateUrls: [],
+      uiServer: {
+        accessPolicy: {
+          allowedHosts: ['file.example.com'],
+          allowedOrigins: ['https://file.example.com'],
+          trustedProxies: ['198.51.100.10'],
+        },
+      },
+    }
+    env.UI_SERVER_TRUSTED_PROXIES = ' 192.0.2.0/24 , 2001:db8::/32 '
+    env.UI_SERVER_ALLOWED_HOSTS = 'gateway.example.com'
+    env.UI_SERVER_ALLOWED_ORIGINS = ''
+    resetSectionCache()
+
+    try {
+      const accessPolicy = Configuration.getConfigurationSection<UIServerConfiguration>(
+        ConfigurationSection.uiServer
+      ).accessPolicy
+      assert.deepStrictEqual(accessPolicy?.trustedProxies, ['192.0.2.0/24', '2001:db8::/32'])
+      assert.deepStrictEqual(accessPolicy.allowedHosts, ['gateway.example.com'])
+      assert.deepStrictEqual(accessPolicy.allowedOrigins, ['https://file.example.com'])
+      assert.strictEqual(accessPolicy.requireTlsForNonLoopback, true)
+    } finally {
+      variables.forEach((name, index) => {
+        const value = originalEnvironment[index]
+        if (value == null) {
+          // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+          delete env[name]
+        } else {
+          env[name] = value
+        }
+      })
+      internals.configurationData = originalData
+      resetSectionCache()
+    }
   })
 
   await it('should return performance storage configuration', () => {

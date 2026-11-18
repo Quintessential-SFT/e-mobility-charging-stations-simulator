@@ -14,7 +14,11 @@ import {
   CURRENT_CONFIGURATION_SCHEMA_VERSION,
   DEPRECATED_KEY_REMAPPINGS,
 } from '../../src/utils/index.js'
-import { ConfigurationValidationError, validateConfiguration } from '../../src/utils/index.js'
+import {
+  applyUIServerAccessPolicyEnvironmentOverrides,
+  ConfigurationValidationError,
+  validateConfiguration,
+} from '../../src/utils/index.js'
 import { clone, logger } from '../../src/utils/index.js'
 import { standardCleanup } from '../helpers/TestLifecycleHelpers.js'
 import {
@@ -545,6 +549,102 @@ await describe('ConfigurationValidation', async () => {
         assert.match(error.message, /uiServer\.options\.port/)
         assert.match(error.message, /\[schema\]/)
       }
+    })
+  })
+  await describe('applyUIServerAccessPolicyEnvironmentOverrides', async () => {
+    const accessPolicy = {
+      allowedHosts: ['file.example.com'],
+      allowedOrigins: ['https://file.example.com'],
+      allowLoopbackProxy: false,
+      requireTlsForNonLoopback: true,
+      trustedProxies: ['198.51.100.10'],
+    }
+
+    await it('should return the access policy unchanged when no variable is set', () => {
+      assert.strictEqual(
+        applyUIServerAccessPolicyEnvironmentOverrides(accessPolicy, {}),
+        accessPolicy
+      )
+    })
+
+    await it('should ignore empty, whitespace-only, and comma-only variables', () => {
+      assert.strictEqual(
+        applyUIServerAccessPolicyEnvironmentOverrides(accessPolicy, {
+          UI_SERVER_ALLOWED_HOSTS: '   ',
+          UI_SERVER_ALLOWED_ORIGINS: ' , ,',
+          UI_SERVER_TRUSTED_PROXIES: '',
+        }),
+        accessPolicy
+      )
+    })
+
+    await it('should replace trustedProxies with trimmed IP and CIDR entries', () => {
+      const overridden = applyUIServerAccessPolicyEnvironmentOverrides(accessPolicy, {
+        UI_SERVER_TRUSTED_PROXIES: '192.0.2.10, 192.0.2.0/24,,fd00::/8 ',
+      })
+      assert.deepStrictEqual(overridden?.trustedProxies, ['192.0.2.10', '192.0.2.0/24', 'fd00::/8'])
+      assert.deepStrictEqual(overridden.allowedHosts, accessPolicy.allowedHosts)
+      assert.deepStrictEqual(overridden.allowedOrigins, accessPolicy.allowedOrigins)
+      assert.deepStrictEqual(accessPolicy.trustedProxies, ['198.51.100.10'])
+    })
+
+    await it('should replace allowedHosts and allowedOrigins', () => {
+      const overridden = applyUIServerAccessPolicyEnvironmentOverrides(accessPolicy, {
+        UI_SERVER_ALLOWED_HOSTS: 'gateway.example.com,ui.example.com',
+        UI_SERVER_ALLOWED_ORIGINS: 'https://ui.example.com',
+      })
+      assert.deepStrictEqual(overridden?.allowedHosts, ['gateway.example.com', 'ui.example.com'])
+      assert.deepStrictEqual(overridden.allowedOrigins, ['https://ui.example.com'])
+      assert.deepStrictEqual(overridden.trustedProxies, accessPolicy.trustedProxies)
+    })
+
+    await it('should apply overrides when no access policy is configured', () => {
+      const overridden = applyUIServerAccessPolicyEnvironmentOverrides(undefined, {
+        UI_SERVER_TRUSTED_PROXIES: '192.0.2.0/24',
+      })
+      assert.deepStrictEqual(overridden, { trustedProxies: ['192.0.2.0/24'] })
+    })
+
+    await it('should reject invalid trustedProxies entries naming the variable and entry', () => {
+      assert.throws(
+        () =>
+          applyUIServerAccessPolicyEnvironmentOverrides(accessPolicy, {
+            UI_SERVER_TRUSTED_PROXIES: '192.0.2.0/24, 192.0.2.0/33',
+          }),
+        (error: unknown) => {
+          assert.ok(error instanceof BaseError)
+          assert.match(error.message, /UI_SERVER_TRUSTED_PROXIES\[1\] '192\.0\.2\.0\/33'/)
+          assert.match(error.message, /CIDR range with a valid prefix/)
+          return true
+        }
+      )
+    })
+
+    await it('should reject hostnames in UI_SERVER_TRUSTED_PROXIES', () => {
+      assert.throws(
+        () =>
+          applyUIServerAccessPolicyEnvironmentOverrides(accessPolicy, {
+            UI_SERVER_TRUSTED_PROXIES: 'proxy.example.com',
+          }),
+        /UI_SERVER_TRUSTED_PROXIES\[0\] 'proxy\.example\.com'/
+      )
+    })
+
+    await it('should reject invalid allowedHosts and allowedOrigins entries', () => {
+      assert.throws(
+        () =>
+          applyUIServerAccessPolicyEnvironmentOverrides(accessPolicy, {
+            UI_SERVER_ALLOWED_HOSTS: 'gateway.example.com:8443',
+          }),
+        /UI_SERVER_ALLOWED_HOSTS\[0\] 'gateway\.example\.com:8443'/
+      )
+      assert.throws(
+        () =>
+          applyUIServerAccessPolicyEnvironmentOverrides(accessPolicy, {
+            UI_SERVER_ALLOWED_ORIGINS: 'https://ui.example.com/path',
+          }),
+        /UI_SERVER_ALLOWED_ORIGINS\[0\] 'https:\/\/ui\.example\.com\/path'/
+      )
     })
   })
 })

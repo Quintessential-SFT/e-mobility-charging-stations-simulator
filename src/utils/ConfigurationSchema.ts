@@ -1,7 +1,6 @@
 import type { ListenOptions } from 'node:net'
 import type { ResourceLimits } from 'node:worker_threads'
 
-import { isIP } from 'node:net'
 import { z } from 'zod'
 
 import {
@@ -14,7 +13,7 @@ import {
 import { WorkerProcessType } from '../worker/index.js'
 import { CURRENT_CONFIGURATION_SCHEMA_VERSION } from './ConfigurationMigrations.js'
 import { Constants } from './Constants.js'
-import { isHostLiteralWithoutPort } from './HostUtils.js'
+import { isHostLiteralWithoutPort, isIPAddressOrCIDR } from './HostUtils.js'
 import { has, isNotEmptyArray } from './Utils.js'
 
 // ---------------------------------------------------------------
@@ -187,7 +186,19 @@ export const UI_SERVER_ACCESS_POLICY_DEFAULTS = {
   trustedProxies: [],
 } as const
 
-const UIServerAccessPolicySchema = z
+/**
+ * Environment variables overriding `uiServer.accessPolicy` list fields. Each
+ * holds a comma-separated list; when set and non-empty, it replaces the
+ * configured list and is validated with the same rules as the configuration
+ * file.
+ */
+export const UI_SERVER_ACCESS_POLICY_ENVIRONMENT_VARIABLES = {
+  allowedHosts: 'UI_SERVER_ALLOWED_HOSTS',
+  allowedOrigins: 'UI_SERVER_ALLOWED_ORIGINS',
+  trustedProxies: 'UI_SERVER_TRUSTED_PROXIES',
+} as const
+
+export const UIServerAccessPolicySchema = z
   .object({
     allowedHosts: z
       .array(
@@ -216,9 +227,9 @@ const UIServerAccessPolicySchema = z
     requireTlsForNonLoopback: z.boolean().optional(),
     trustedProxies: z
       .array(
-        z.string().refine(value => isIP(value) !== 0, {
+        z.string().refine(isIPAddressOrCIDR, {
           message:
-            'must be an IPv4 or IPv6 literal (hostnames, brackets, and CIDR ranges are not supported)',
+            'must be an IPv4 or IPv6 literal or a CIDR range with a valid prefix (e.g. 192.0.2.10, 192.0.2.0/24, 2001:db8::/32); hostnames and brackets are not supported',
         })
       )
       .optional(),

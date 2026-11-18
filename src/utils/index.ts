@@ -31,7 +31,11 @@ export {
   configurationLogPrefix,
   getDefaultPerformanceStorageUri,
 } from './ConfigurationUtils.js'
-export { ConfigurationValidationError, validateConfiguration } from './ConfigurationValidation.js'
+export {
+  applyUIServerAccessPolicyEnvironmentOverrides,
+  ConfigurationValidationError,
+  validateConfiguration,
+} from './ConfigurationValidation.js'
 export { Constants } from './Constants.js'
 export { ACElectricUtils, DCElectricUtils } from './ElectricUtils.js'
 export { getEnumStringValue } from './EnumUtils.js'
@@ -51,11 +55,14 @@ export {
 } from './FieldError.js'
 export { atomicWriteFile, atomicWriteFileSync, watchJsonFile } from './FileUtils.js'
 export {
+  type CIDRRange,
   isHostLiteralWithoutPort,
+  isIPAddressOrCIDR,
   isLoopback,
   LOOPBACK_HOSTNAME,
   normalizeHost,
   normalizeIPAddress,
+  parseCIDR,
 } from './HostUtils.js'
 export { getRotatingLogFileName, logger } from './Logger.js'
 export {
