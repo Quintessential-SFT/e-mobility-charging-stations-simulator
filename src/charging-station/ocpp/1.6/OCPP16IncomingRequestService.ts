@@ -1817,9 +1817,13 @@ export class OCPP16IncomingRequestService extends OCPPIncomingRequestService<OCP
         idTag
       )
     }
+    // A connector kept in Finishing by a locked EV side disconnect stop accepts a
+    // new transaction: it goes Preparing (OCPP 1.6 §4.9 F2) and never resumes the
+    // stopped one.
+    const remoteStartConnectorStatus = chargingStation.getConnectorStatus(transactionConnectorId)
     if (
-      chargingStation.getConnectorStatus(transactionConnectorId)?.status ===
-      OCPP16ChargePointStatus.Finishing
+      remoteStartConnectorStatus?.status === OCPP16ChargePointStatus.Finishing &&
+      !OCPP16ServiceUtils.isFinishingAfterEVSideDisconnect(remoteStartConnectorStatus)
     ) {
       return this.notifyRemoteStartTransactionRejected(
         chargingStation,

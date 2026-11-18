@@ -29,6 +29,7 @@ import {
   OCPP16StandardParametersKey,
   OCPP16StopTransactionReason,
   OCPP16TriggerMessageStatus,
+  OCPP16UnlockStatus,
   OCPPVersion,
   RequestCommand,
   type SampledValueTemplate,
@@ -505,6 +506,207 @@ await describe('OCPP16ServiceUtils — EV side disconnect', async () => {
         assert.strictEqual(connectorStatus.locked, expectedLocked)
       })
     }
+  })
+
+  await describe('Finishing after a locked EV side disconnect stop', async () => {
+    const stopRequest = (reason: OCPP16StopTransactionReason): OCPP16StopTransactionRequest => ({
+      meterStop: 0,
+      reason,
+      timestamp: new Date(),
+      transactionId: 42,
+    })
+
+    const stopUnpluggedTransaction = async (
+      unlockKey: string,
+      reason: OCPP16StopTransactionReason,
+      statusBeforeStop: OCPP16ChargePointStatus = OCPP16ChargePointStatus.Finishing
+    ): Promise<void> => {
+      upsertConfigurationKey(
+        station,
+        OCPP16StandardParametersKey.UnlockConnectorOnEVSideDisconnect,
+        unlockKey
+      )
+      setupConnectorWithTransaction(station, 1, { transactionId: 42 })
+      const connectorStatus = station.getConnectorStatus(1)
+      assert.ok(connectorStatus != null)
+      connectorStatus.cablePlugged = false
+      connectorStatus.locked = true
+      connectorStatus.status = statusBeforeStop
+      await new OCPP16ResponseService().responseHandler(
+        station,
+        OCPP16RequestCommand.STOP_TRANSACTION,
+        { idTagInfo: { status: OCPP16AuthorizationStatus.ACCEPTED } },
+        stopRequest(reason)
+      )
+    }
+
+    for (const [unlockKey, reason, expectedStatus, expectedLocked] of [
+      [
+        'false',
+        OCPP16StopTransactionReason.EV_DISCONNECTED,
+        OCPP16ChargePointStatus.Finishing,
+        true,
+      ],
+      [
+        'true',
+        OCPP16StopTransactionReason.EV_DISCONNECTED,
+        OCPP16ChargePointStatus.Available,
+        false,
+      ],
+      ['false', OCPP16StopTransactionReason.REMOTE, OCPP16ChargePointStatus.Available, false],
+    ] as const) {
+      await it(`should end in ${expectedStatus} with UnlockConnectorOnEVSideDisconnect=${unlockKey} and reason ${reason}`, async () => {
+        await stopUnpluggedTransaction(unlockKey, reason)
+
+        const connectorStatus = station.getConnectorStatus(1)
+        assert.strictEqual(connectorStatus?.transactionStarted, false)
+        assert.strictEqual(connectorStatus.status, expectedStatus)
+        assert.strictEqual(connectorStatus.locked, expectedLocked)
+        assert.deepStrictEqual(
+          statusNotifications(requests).map(payload => payload.status),
+          expectedStatus === OCPP16ChargePointStatus.Finishing ? [] : [expectedStatus]
+        )
+      })
+    }
+
+    await it('should report Finishing with the EV side disconnected info if the connector was not already Finishing', async () => {
+      await stopUnpluggedTransaction(
+        'false',
+        OCPP16StopTransactionReason.EV_DISCONNECTED,
+        OCPP16ChargePointStatus.SuspendedEV
+      )
+
+      assert.deepStrictEqual(statusNotifications(requests), [
+        {
+          connectorId: 1,
+          errorCode: OCPP16ChargePointErrorCode.NO_ERROR,
+          info: EV_SIDE_DISCONNECTED_INFO,
+          status: OCPP16ChargePointStatus.Finishing,
+        },
+      ])
+      assert.strictEqual(station.getConnectorStatus(1)?.status, OCPP16ChargePointStatus.Finishing)
+    })
+
+    await it('should keep Finishing after a full unplug stop and go Preparing when plugged in again without a StartTransaction', async () => {
+      upsertConfigurationKey(
+        station,
+        OCPP16StandardParametersKey.UnlockConnectorOnEVSideDisconnect,
+        'false'
+      )
+      setupConnectorWithTransaction(station, 1, { transactionId: 42 })
+      const connectorStatus = station.getConnectorStatus(1)
+      assert.ok(connectorStatus != null)
+      connectorStatus.cablePlugged = true
+      connectorStatus.locked = true
+      connectorStatus.status = OCPP16ChargePointStatus.Charging
+
+      await OCPP16ServiceUtils.unplugConnector(station, 1)
+      const stop = requests.find(request => request.command === RequestCommand.STOP_TRANSACTION)
+      assert.ok(stop != null)
+      await new OCPP16ResponseService().responseHandler(
+        station,
+        OCPP16RequestCommand.STOP_TRANSACTION,
+        { idTagInfo: { status: OCPP16AuthorizationStatus.ACCEPTED } },
+        stop.payload as unknown as OCPP16StopTransactionRequest
+      )
+
+      assert.strictEqual(connectorStatus.transactionStarted, false)
+      assert.strictEqual(connectorStatus.status, OCPP16ChargePointStatus.Finishing)
+      assert.strictEqual(OCPP16ServiceUtils.isFinishingAfterEVSideDisconnect(connectorStatus), true)
+
+      await OCPP16ServiceUtils.plugConnector(station, 1)
+
+      assert.strictEqual(connectorStatus.cablePlugged, true)
+      assert.strictEqual(connectorStatus.status, OCPP16ChargePointStatus.Preparing)
+      assert.strictEqual(connectorStatus.transactionStarted, false)
+      assert.deepStrictEqual(
+        statusNotifications(requests).map(payload => payload.status),
+        [OCPP16ChargePointStatus.Finishing, OCPP16ChargePointStatus.Preparing]
+      )
+      assert.strictEqual(
+        requests.filter(request => request.command === RequestCommand.START_TRANSACTION).length,
+        0
+      )
+    })
+
+    await it('should not report Preparing when an unlocked Finishing connector is plugged in again', async () => {
+      const connectorStatus = station.getConnectorStatus(1)
+      assert.ok(connectorStatus != null)
+      connectorStatus.cablePlugged = false
+      connectorStatus.locked = false
+      connectorStatus.status = OCPP16ChargePointStatus.Finishing
+
+      await OCPP16ServiceUtils.plugConnector(station, 1)
+
+      assert.strictEqual(connectorStatus.status, OCPP16ChargePointStatus.Finishing)
+      assert.strictEqual(requests.length, 0)
+    })
+
+    await it('should accept a remote start, go Preparing, and start a new transaction once plugged in again', async () => {
+      await stopUnpluggedTransaction('false', OCPP16StopTransactionReason.EV_DISCONNECTED)
+      const { incomingRequestService, testableService } = createOCPP16IncomingRequestTestContext()
+      const request = { connectorId: 1, idTag: 'TAG-2' }
+
+      const response = await testableService.handleRequestRemoteStartTransaction(station, request)
+      assert.strictEqual(response.status, GenericStatus.Accepted)
+      incomingRequestService.emit(
+        OCPP16IncomingRequestCommand.REMOTE_START_TRANSACTION,
+        station,
+        request,
+        response
+      )
+      await flushMicrotasks()
+
+      assert.strictEqual(station.getConnectorStatus(1)?.status, OCPP16ChargePointStatus.Preparing)
+      assert.deepStrictEqual(
+        requests.map(request => request.command),
+        [RequestCommand.STATUS_NOTIFICATION]
+      )
+
+      await OCPP16ServiceUtils.plugConnector(station, 1)
+
+      const start = requests.find(request => request.command === RequestCommand.START_TRANSACTION)
+      assert.strictEqual(start?.payload.idTag, 'TAG-2')
+      assert.strictEqual(start.payload.connectorId, 1)
+    })
+
+    await it('should still reject a remote start while the stopping transaction is Finishing', async () => {
+      setupConnectorWithTransaction(station, 1, { transactionId: 42 })
+      const connectorStatus = station.getConnectorStatus(1)
+      assert.ok(connectorStatus != null)
+      connectorStatus.locked = true
+      connectorStatus.status = OCPP16ChargePointStatus.Finishing
+      const { testableService } = createOCPP16IncomingRequestTestContext()
+
+      const response = await testableService.handleRequestRemoteStartTransaction(station, {
+        connectorId: 1,
+        idTag: 'TAG-2',
+      })
+
+      assert.strictEqual(response.status, GenericStatus.Rejected)
+    })
+
+    await it('should go Available and unlock on UnlockConnector', async () => {
+      await stopUnpluggedTransaction('false', OCPP16StopTransactionReason.EV_DISCONNECTED)
+      const { testableService } = createOCPP16IncomingRequestTestContext()
+
+      const response = await testableService.handleRequestUnlockConnector(station, {
+        connectorId: 1,
+      })
+
+      const connectorStatus = station.getConnectorStatus(1)
+      assert.strictEqual(response.status, OCPP16UnlockStatus.UNLOCKED)
+      assert.strictEqual(connectorStatus?.status, OCPP16ChargePointStatus.Available)
+      assert.strictEqual(connectorStatus.locked, false)
+      assert.deepStrictEqual(
+        statusNotifications(requests).map(payload => payload.status),
+        [OCPP16ChargePointStatus.Available]
+      )
+      assert.strictEqual(
+        requests.filter(request => request.command === RequestCommand.STOP_TRANSACTION).length,
+        0
+      )
+    })
   })
 
   await describe('remote start waiting for the cable', async () => {

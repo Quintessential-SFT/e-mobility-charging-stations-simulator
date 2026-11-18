@@ -1084,6 +1084,43 @@ export class OCPP16ServiceUtils {
   }
 
   /**
+   * Whether a connector stays in `Finishing` after its transaction stopped: the
+   * stop reason is `EVDisconnected`, UnlockConnectorOnEVSideDisconnect is false so
+   * the cable stays locked at the Charge Point, and no new transaction exists.
+   * Only UnlockConnector (§4.9 F1, `Available`) or a new start (F2, `Preparing`)
+   * leaves this state (§7.7: a locked cable is not available for a new user).
+   * @param connectorStatus - Connector status
+   * @returns Whether the connector is in the locked post EV side disconnect `Finishing` state
+   */
+  public static isFinishingAfterEVSideDisconnect (
+    connectorStatus: ConnectorStatus | undefined
+  ): boolean {
+    return (
+      connectorStatus?.status === OCPP16ChargePointStatus.Finishing &&
+      connectorStatus.locked === true &&
+      connectorStatus.transactionStarted !== true &&
+      connectorStatus.transactionStarting !== true
+    )
+  }
+
+  /**
+   * Whether a StopTransaction leaves the connector locked (OCPP 1.6 §4.10): the
+   * reason is `EVDisconnected` and UnlockConnectorOnEVSideDisconnect is false.
+   * @param chargingStation - Target charging station
+   * @param reason - StopTransaction reason
+   * @returns Whether the connector stays locked after the stop
+   */
+  public static isLockedAfterEVSideDisconnectStop (
+    chargingStation: ChargingStation,
+    reason: OCPP16StopTransactionReason | undefined
+  ): boolean {
+    return (
+      reason === OCPP16StopTransactionReason.EV_DISCONNECTED &&
+      !OCPP16ServiceUtils.getUnlockConnectorOnEVSideDisconnect(chargingStation)
+    )
+  }
+
+  /**
    * @param chargingStation - Target charging station
    * @returns Whether signed meter value generation is enabled (SampledDataSignReadings=true)
    */
@@ -1121,7 +1158,9 @@ export class OCPP16ServiceUtils {
    * Plugs the cable in at the EV side: starts a remote start waiting for the
    * cable, resumes a transaction suspended by an EV side disconnect
    * (`SuspendedEV` → `Charging`), or reports `Preparing` on an `Available`
-   * connector.
+   * connector or on a connector kept in `Finishing` after an EV side disconnect
+   * stop (§4.9 F2). The stopped transaction never resumes: charging needs a new
+   * authorization and StartTransaction.
    * @param chargingStation - Target charging station
    * @param connectorId - Connector identifier
    */
@@ -1163,8 +1202,9 @@ export class OCPP16ServiceUtils {
       return
     }
     if (
-      connectorStatus.transactionStarting !== true &&
-      connectorStatus.status === OCPP16ChargePointStatus.Available
+      (connectorStatus.transactionStarting !== true &&
+        connectorStatus.status === OCPP16ChargePointStatus.Available) ||
+      OCPP16ServiceUtils.isFinishingAfterEVSideDisconnect(connectorStatus)
     ) {
       await sendAndSetConnectorStatus(chargingStation, {
         connectorId,

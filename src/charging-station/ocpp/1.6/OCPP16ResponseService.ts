@@ -20,6 +20,7 @@ import {
   type OCPP16AuthorizeRequest,
   type OCPP16AuthorizeResponse,
   type OCPP16BootNotificationResponse,
+  OCPP16ChargePointErrorCode,
   OCPP16ChargePointStatus,
   type OCPP16MeterValuesRequest,
   type OCPP16MeterValuesResponse,
@@ -27,7 +28,6 @@ import {
   OCPP16StandardParametersKey,
   type OCPP16StartTransactionRequest,
   type OCPP16StartTransactionResponse,
-  OCPP16StopTransactionReason,
   type OCPP16StopTransactionRequest,
   type OCPP16StopTransactionResponse,
   OCPPVersion,
@@ -52,6 +52,7 @@ import {
 } from '../OCPPConnectorStatusOperations.js'
 import { OCPPResponseService } from '../OCPPResponseService.js'
 import { createPayloadValidatorMap, isRequestCommandSupported } from '../OCPPServiceUtils.js'
+import { OCPP16Constants } from './OCPP16Constants.js'
 import { OCPP16ServiceUtils } from './OCPP16ServiceUtils.js'
 
 const moduleName = 'OCPP16ResponseService'
@@ -83,13 +84,48 @@ const finalizeTransactionConnectorStatus = (
   if (connectorStatus != null) {
     // OCPP 1.6 §4.10: after an EV side disconnect stop, the connector unlocks
     // only when UnlockConnectorOnEVSideDisconnect is true.
-    const keepLocked =
-      requestPayload.reason === OCPP16StopTransactionReason.EV_DISCONNECTED &&
-      !OCPP16ServiceUtils.getUnlockConnectorOnEVSideDisconnect(chargingStation)
-    if (!keepLocked) {
+    if (
+      !OCPP16ServiceUtils.isLockedAfterEVSideDisconnectStop(chargingStation, requestPayload.reason)
+    ) {
       connectorStatus.locked = false
     }
   }
+}
+
+/**
+ * Sends the connector status after a StopTransaction. A connector left locked by
+ * an `EVDisconnected` stop (UnlockConnectorOnEVSideDisconnect false) stays in
+ * `Finishing` instead of going `Available` (OCPP 1.6 §4.9, §7.7): it leaves on
+ * UnlockConnector (F1) or when plugged in again or started anew (F2). Otherwise the connector
+ * goes `Available` or `Unavailable` as before.
+ * @param chargingStation - Target charging station
+ * @param connectorId - Connector of the stopped transaction
+ * @param connectorStatus - Connector status
+ * @param requestPayload - StopTransaction request
+ */
+const sendPostStopTransactionStatus = async (
+  chargingStation: ChargingStation,
+  connectorId: number,
+  connectorStatus: ConnectorStatus | undefined,
+  requestPayload: OCPP16StopTransactionRequest
+): Promise<void> => {
+  if (
+    connectorStatus != null &&
+    OCPP16ServiceUtils.isLockedAfterEVSideDisconnectStop(chargingStation, requestPayload.reason) &&
+    chargingStation.isChargingStationAvailable() &&
+    connectorStatus.availability === AvailabilityType.Operative
+  ) {
+    if (connectorStatus.status !== OCPP16ChargePointStatus.Finishing) {
+      await sendAndSetConnectorStatus(chargingStation, {
+        connectorId,
+        errorCode: OCPP16ChargePointErrorCode.NO_ERROR,
+        info: OCPP16Constants.EV_SIDE_DISCONNECTED_INFO,
+        status: OCPP16ChargePointStatus.Finishing,
+      })
+    }
+    return
+  }
+  await sendPostTransactionStatus(chargingStation, connectorId)
 }
 
 /**
@@ -670,9 +706,19 @@ export class OCPP16ResponseService extends OCPPResponseService {
         }
         return
       }
-      await sendPostTransactionStatus(chargingStation, transactionConnectorId)
+      await sendPostStopTransactionStatus(
+        chargingStation,
+        transactionConnectorId,
+        transactionConnectorStatus,
+        requestPayload
+      )
     } else {
-      await sendPostTransactionStatus(chargingStation, transactionConnectorId)
+      await sendPostStopTransactionStatus(
+        chargingStation,
+        transactionConnectorId,
+        transactionConnectorStatus,
+        requestPayload
+      )
       decrementPowerDivider(chargingStation)
       finalizeTransactionConnectorStatus(
         chargingStation,
