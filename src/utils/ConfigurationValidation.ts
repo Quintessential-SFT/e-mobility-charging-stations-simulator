@@ -2,7 +2,7 @@ import type { ZodError } from 'zod'
 
 import chalk from 'chalk'
 
-import type { ConfigurationData } from '../types/index.js'
+import type { ConfigurationData, UIServerConfiguration } from '../types/index.js'
 import type { FieldError } from './FieldError.js'
 
 import { BaseError } from '../exception/index.js'
@@ -12,7 +12,11 @@ import {
   CURRENT_CONFIGURATION_SCHEMA_VERSION,
   remapDeprecatedKeys,
 } from './ConfigurationMigrations.js'
-import { ConfigurationSchema } from './ConfigurationSchema.js'
+import {
+  ConfigurationSchema,
+  UI_SERVER_ACCESS_POLICY_ENVIRONMENT_VARIABLES,
+  UIServerAccessPolicySchema,
+} from './ConfigurationSchema.js'
 import { configurationLogPrefix } from './ConfigurationUtils.js'
 import { formatFieldErrorsSummary, mapZodIssuesToFieldErrors } from './FieldError.js'
 import { assertIsJsonObject, clone, isEmpty, isNotEmptyArray } from './Utils.js'
@@ -146,3 +150,70 @@ const transformConfiguration = (
   validated: ConfigurationData,
   _filePath: string
 ): ConfigurationData => clone(validated)
+
+type UIServerAccessPolicy = NonNullable<UIServerConfiguration['accessPolicy']>
+type UIServerAccessPolicyListField = keyof typeof UI_SERVER_ACCESS_POLICY_ENVIRONMENT_VARIABLES
+
+const parseEnvironmentList = (value: string | undefined): string[] =>
+  (value ?? '')
+    .split(',')
+    .map(entry => entry.trim())
+    .filter(entry => entry !== '')
+
+/**
+ * Apply the `UI_SERVER_*` environment variable overrides listed in
+ * `UI_SERVER_ACCESS_POLICY_ENVIRONMENT_VARIABLES` to a UI server access policy.
+ * Each variable is a comma-separated list (surrounding whitespace and empty
+ * entries are ignored); when it holds at least one entry, it replaces the
+ * corresponding configured list. Unset or empty variables leave the configured
+ * value unchanged. The resulting policy is validated against the same schema as
+ * the configuration file.
+ * @param accessPolicy - Access policy resolved from defaults and the configuration file
+ * @param environment - Environment variables to read (typically `process.env`)
+ * @returns The access policy with overrides applied, or `accessPolicy` unchanged when no override is set
+ * @throws {BaseError} When an override entry is invalid, naming the variable and the entry
+ */
+export const applyUIServerAccessPolicyEnvironmentOverrides = (
+  accessPolicy: UIServerConfiguration['accessPolicy'],
+  environment: NodeJS.ProcessEnv
+): UIServerConfiguration['accessPolicy'] => {
+  const overrides: Partial<Record<UIServerAccessPolicyListField, string[]>> = {}
+  for (const [field, variableName] of Object.entries(
+    UI_SERVER_ACCESS_POLICY_ENVIRONMENT_VARIABLES
+  ) as [UIServerAccessPolicyListField, string][]) {
+    const entries = parseEnvironmentList(environment[variableName])
+    if (isNotEmptyArray(entries)) {
+      overrides[field] = entries
+    }
+  }
+  if (isEmpty(overrides)) {
+    return accessPolicy
+  }
+  const overridden: UIServerAccessPolicy = { ...accessPolicy, ...overrides }
+  const result = UIServerAccessPolicySchema.safeParse(overridden)
+  if (!result.success) {
+    const fieldErrors: FieldError[] = result.error.issues.map(issue => {
+      const [field, index] = issue.path
+      const entries = overrides[field as UIServerAccessPolicyListField]
+      if (entries == null) {
+        return {
+          message: issue.message,
+          path: ['uiServer', 'accessPolicy', ...issue.path].join('.'),
+        }
+      }
+      const variableName =
+        UI_SERVER_ACCESS_POLICY_ENVIRONMENT_VARIABLES[field as UIServerAccessPolicyListField]
+      return {
+        message: issue.message,
+        path:
+          typeof index === 'number'
+            ? `${variableName}[${index.toString()}] '${entries[index]}'`
+            : variableName,
+      }
+    })
+    throw new BaseError(
+      `${moduleName}: Invalid UI server access policy environment override:\n${formatFieldErrorsSummary(fieldErrors)}`
+    )
+  }
+  return overridden
+}

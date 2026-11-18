@@ -475,20 +475,52 @@ await describe('ConfigurationSchema', async () => {
       assert.ok(result.error.issues.some(i => i.path.join('.').includes('trustedProxies')))
     })
 
-    await it('should reject CIDR ranges in trustedProxies', () => {
+    await it('should accept IPv4 and IPv6 CIDR ranges in trustedProxies', () => {
       const result = ConfigurationSchema.safeParse(
         buildMinimalConfiguration({
           uiServer: {
             accessPolicy: {
-              trustedProxies: ['10.0.0.0/8'],
+              trustedProxies: ['10.0.0.0/8', '192.0.2.0/24', 'fd00::/8', '2001:db8::/32'],
             },
             enabled: true,
             type: 'ws',
           },
         })
       )
-      assert.ok(!result.success)
-      assert.ok(result.error.issues.some(i => i.path.join('.').includes('trustedProxies')))
+      assert.ok(
+        result.success,
+        `Expected CIDR ranges to be accepted: ${result.success ? '' : JSON.stringify(result.error.issues)}`
+      )
+    })
+
+    await it('should reject invalid CIDR ranges in trustedProxies with a clear message', () => {
+      for (const proxy of [
+        '192.0.2.0/33',
+        '2001:db8::/129',
+        '192.0.2.0/',
+        '192.0.2.0/abc',
+        '192.0.2.256/24',
+        'proxy.example.com/24',
+        '[2001:db8::]/32',
+      ]) {
+        const result = ConfigurationSchema.safeParse(
+          buildMinimalConfiguration({
+            uiServer: {
+              accessPolicy: {
+                trustedProxies: [proxy],
+              },
+              enabled: true,
+              type: 'ws',
+            },
+          })
+        )
+        assert.ok(!result.success, `Expected '${proxy}' to be rejected`)
+        const issue = result.error.issues.find(i =>
+          i.path.join('.').startsWith('uiServer.accessPolicy.trustedProxies')
+        )
+        assert.ok(issue != null, `Expected a trustedProxies issue for '${proxy}'`)
+        assert.match(issue.message, /CIDR range with a valid prefix/)
+      }
     })
 
     await it('should accept IPv4 and IPv6 literals in trustedProxies', () => {

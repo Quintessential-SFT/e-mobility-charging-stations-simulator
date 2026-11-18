@@ -1303,6 +1303,179 @@ await describe('UIServerAccessPolicy', async () => {
     })
   })
 
+  await describe('trusted proxy CIDR ranges', async () => {
+    const createForwardedRequest = (
+      remoteAddress: string,
+      forwardedProto = 'https'
+    ): IncomingMessage =>
+      createAccessPolicyRequest({
+        headers: {
+          host: GATEWAY_HOST,
+          'x-forwarded-for': '203.0.113.7',
+          'x-forwarded-proto': forwardedProto,
+        },
+        remoteAddress,
+      })
+
+    await it('should keep matching exact IP entries alongside ranges', () => {
+      const config = createGatewayConfigWithTrustedProxy({
+        trustedProxies: [TRUSTED_PROXY_IP, '198.51.100.0/24'],
+      })
+
+      const exact = evaluate(createForwardedRequest(TRUSTED_PROXY_IP), config)
+      assert.strictEqual(exact.allowed, true)
+      assert.strictEqual(exact.clientAddress, '203.0.113.7')
+      expectDenied(
+        evaluate(createForwardedRequest('192.0.2.11'), config),
+        UIServerAccessDenialReason.ForwardedFromUntrustedPeer
+      )
+    })
+
+    await it('should trust a peer inside an IPv4 range', () => {
+      const decision = evaluate(
+        createForwardedRequest('192.0.2.77'),
+        createGatewayConfigWithTrustedProxy({ trustedProxies: ['192.0.2.0/24'] })
+      )
+
+      assert.strictEqual(decision.allowed, true)
+      assert.strictEqual(decision.clientAddress, '203.0.113.7')
+    })
+
+    await it('should reject forwarded headers from a peer outside an IPv4 range', () => {
+      const decision = evaluate(
+        createForwardedRequest('198.51.100.77'),
+        createGatewayConfigWithTrustedProxy({ trustedProxies: ['192.0.2.0/24'] })
+      )
+
+      expectDenied(decision, UIServerAccessDenialReason.ForwardedFromUntrustedPeer)
+    })
+
+    await it('should honor range boundaries', () => {
+      const config = createGatewayConfigWithTrustedProxy({ trustedProxies: ['192.0.2.128/25'] })
+
+      assert.strictEqual(evaluate(createForwardedRequest('192.0.2.128'), config).allowed, true)
+      assert.strictEqual(evaluate(createForwardedRequest('192.0.2.255'), config).allowed, true)
+      expectDenied(
+        evaluate(createForwardedRequest('192.0.2.127'), config),
+        UIServerAccessDenialReason.ForwardedFromUntrustedPeer
+      )
+    })
+
+    await it('should trust a peer inside an IPv6 range', () => {
+      const config = createGatewayConfigWithTrustedProxy({ trustedProxies: ['2001:db8:1::/48'] })
+
+      const inside = evaluate(createForwardedRequest('2001:db8:1:ffff::10'), config)
+      assert.strictEqual(inside.allowed, true)
+      assert.strictEqual(inside.clientAddress, '203.0.113.7')
+      expectDenied(
+        evaluate(createForwardedRequest('2001:db8:2::10'), config),
+        UIServerAccessDenialReason.ForwardedFromUntrustedPeer
+      )
+    })
+
+    await it('should match IPv4-mapped IPv6 peers against IPv4 ranges', () => {
+      const config = createGatewayConfigWithTrustedProxy({ trustedProxies: ['192.0.2.0/24'] })
+
+      assert.strictEqual(
+        evaluate(createForwardedRequest('::ffff:192.0.2.77'), config).allowed,
+        true
+      )
+      assert.strictEqual(evaluate(createForwardedRequest('::ffff:c000:24d'), config).allowed, true)
+      expectDenied(
+        evaluate(createForwardedRequest('::ffff:198.51.100.77'), config),
+        UIServerAccessDenialReason.ForwardedFromUntrustedPeer
+      )
+    })
+
+    await it('should not match IPv4 peers against unrelated IPv6 ranges', () => {
+      const decision = evaluate(
+        createForwardedRequest('192.0.2.77'),
+        createGatewayConfigWithTrustedProxy({ trustedProxies: ['2001:db8::/32'] })
+      )
+
+      expectDenied(decision, UIServerAccessDenialReason.ForwardedFromUntrustedPeer)
+    })
+
+    await it('should apply host checks to requests from a range-trusted peer', () => {
+      const decision = evaluate(
+        createAccessPolicyRequest({
+          headers: {
+            host: 'attacker.example.net',
+            'x-forwarded-for': '203.0.113.7',
+            'x-forwarded-proto': 'https',
+          },
+          remoteAddress: '192.0.2.77',
+        }),
+        createGatewayConfigWithTrustedProxy({ trustedProxies: ['192.0.2.0/24'] })
+      )
+
+      expectDenied(decision, UIServerAccessDenialReason.HostNotAllowed)
+    })
+
+    await it('should apply origin checks to requests from a range-trusted peer', () => {
+      const decision = evaluate(
+        createAccessPolicyRequest({
+          headers: {
+            host: GATEWAY_HOST,
+            origin: 'https://attacker.example.net',
+            'x-forwarded-for': '203.0.113.7',
+            'x-forwarded-proto': 'https',
+          },
+          remoteAddress: '192.0.2.77',
+        }),
+        createGatewayConfigWithTrustedProxy({ trustedProxies: ['192.0.2.0/24'] })
+      )
+
+      expectDenied(decision, UIServerAccessDenialReason.OriginNotAllowed)
+    })
+
+    await it('should apply TLS checks to requests from a range-trusted peer', () => {
+      const decision = evaluate(
+        createForwardedRequest('192.0.2.77', 'http'),
+        createGatewayConfigWithTrustedProxy({ trustedProxies: ['192.0.2.0/24'] })
+      )
+
+      expectDenied(decision, UIServerAccessDenialReason.ProxyTlsRequired)
+    })
+
+    await it('should treat a secure forwarded protocol from a range-trusted peer as secure', () => {
+      const config = createGatewayConfigWithTrustedProxy({ trustedProxies: ['192.0.2.0/24'] })
+
+      assert.strictEqual(
+        isRequestEffectivelySecure(
+          createForwardedRequest('192.0.2.77'),
+          config,
+          createUIServerAccessCache()
+        ),
+        true
+      )
+      assert.strictEqual(
+        isRequestEffectivelySecure(
+          createForwardedRequest('198.51.100.77'),
+          config,
+          createUIServerAccessCache()
+        ),
+        false
+      )
+    })
+
+    await it('should reuse the normalized trusted proxy index per configuration', () => {
+      const config = createGatewayConfigWithTrustedProxy({
+        trustedProxies: [TRUSTED_PROXY_IP, '198.51.100.0/24'],
+      })
+      const cache = createUIServerAccessCache()
+
+      resolveUIServerAccess(createForwardedRequest('198.51.100.7'), config, cache)
+      const index = cache.trustedProxies.get(config)
+      resolveUIServerAccess(createForwardedRequest('198.51.100.8'), config, cache)
+
+      assert.ok(index != null)
+      assert.strictEqual(cache.trustedProxies.get(config), index)
+      assert.strictEqual(index.addresses.has(`ipv4:${TRUSTED_PROXY_IP}`), true)
+      assert.strictEqual(index.ranges?.check('198.51.100.9', 'ipv4'), true)
+    })
+  })
+
   await describe('per-request memoization', async () => {
     await it('should evaluate the policy only once per request', () => {
       const config = createAccessPolicyConfiguration()

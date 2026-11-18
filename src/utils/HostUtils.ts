@@ -50,6 +50,55 @@ export const normalizeIPAddress = (
 }
 
 /**
+ * CIDR range parsed from an `address/prefix` literal.
+ */
+export interface CIDRRange {
+  readonly address: string
+  readonly family: 'ipv4' | 'ipv6'
+  readonly prefix: number
+}
+
+const CIDR_PREFIX_PATTERN = /^(?:0|[1-9]\d{0,2})$/
+
+/**
+ * Parse a CIDR range literal (`address/prefix`) such as `192.0.2.0/24` or
+ * `2001:db8::/32`. The address must be a bare IPv4 or IPv6 literal (no
+ * brackets, no zone index) and the prefix a decimal integer within the
+ * family bounds (0-32 for IPv4, 0-128 for IPv6). Host bits below the prefix
+ * are ignored.
+ * @param value The CIDR literal to parse.
+ * @returns The parsed range, or `undefined` when `value` is not a valid CIDR literal.
+ */
+export const parseCIDR = (value: string): CIDRRange | undefined => {
+  const separatorIndex = value.indexOf('/')
+  if (separatorIndex === -1 || separatorIndex !== value.lastIndexOf('/')) {
+    return undefined
+  }
+  const address = value.slice(0, separatorIndex)
+  const prefixLiteral = value.slice(separatorIndex + 1)
+  if (!CIDR_PREFIX_PATTERN.test(prefixLiteral)) {
+    return undefined
+  }
+  const version = isIP(address)
+  if (version === 0) {
+    return undefined
+  }
+  const prefix = convertToInt(prefixLiteral)
+  if (prefix > (version === 4 ? 32 : 128)) {
+    return undefined
+  }
+  return { address, family: version === 4 ? 'ipv4' : 'ipv6', prefix }
+}
+
+/**
+ * Whether `value` is a bare IPv4/IPv6 literal or a CIDR range literal.
+ * @param value The value to check.
+ * @returns `true` when `value` is an IP literal or a valid CIDR range.
+ */
+export const isIPAddressOrCIDR = (value: string): boolean =>
+  isIP(value) !== 0 || parseCIDR(value) != null
+
+/**
  * Strip a bracketed IPv6 wrapper and a trailing `:port` suffix, lowercase
  * the result, and drop a single trailing dot.
  * @param host The raw `Host` header or address value.
